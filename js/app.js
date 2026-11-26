@@ -34,7 +34,7 @@ function when(ts) {
   if (diff < 86400 * 7) return Math.floor(diff / 86400) + ' d ago';
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 }
-const initials = (n) => String(n || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+const initials = (n) => (String(n || '').match(/\p{L}[\p{L}'’-]*/gu) || ['?']).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 function avatar(name) {
   let h = 0; for (const c of String(name || '')) h = (h * 31 + c.charCodeAt(0)) % 5;
   return `<span class="avatar a${h}" aria-hidden="true">${esc(initials(name))}</span>`;
