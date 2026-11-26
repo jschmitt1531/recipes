@@ -1,6 +1,6 @@
 // Offline support: keep the app's own files cached so it opens without signal
 // (e.g. in the kitchen or the grocery store). Recipes themselves are cached by Firestore.
-const CACHE = 'family-recipes-v5';
+const CACHE = 'family-recipes-v6';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/units.js', 'js/parse.js', 'js/grocery.js', 'js/categories.js', 'js/importers.js', 'js/config.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
