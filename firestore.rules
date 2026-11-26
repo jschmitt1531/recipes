@@ -1,0 +1,77 @@
+rules_version = '2';
+// Family Recipes - Firestore security rules.
+// Paste this whole file into Firebase console -> Firestore Database -> Rules -> Publish.
+//
+// Only people on the family list (members/{email}) can see anything.
+// Roles: owner > editor > contributor > viewer (see README).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function memberPath() { return /databases/$(database)/documents/members/$(myEmail()); }
+    function isMember() { return signedIn() && exists(memberPath()); }
+    function rank(r) { return r == 'owner' ? 4 : (r == 'editor' ? 3 : (r == 'contributor' ? 2 : (r == 'viewer' ? 1 : 0))); }
+    function atLeast(r) { return isMember() && rank(get(memberPath()).data.role) >= rank(r); }
+    function familyExists() { return exists(/databases/$(database)/documents/meta/family); }
+    function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    function isMine(field) { return resource.data[field].uid == request.auth.uid; }
+    function claimsMe(field) { return request.resource.data[field].uid == request.auth.uid; }
+
+    // Family name. Readable by any signed-in user so a not-yet-invited relative sees
+    // "ask the owner to add you" instead of an error. Contains only the name.
+    match /meta/family {
+      allow get: if signedIn();
+      // First person to set up the family must also create their own owner record in the same batch.
+      allow create: if signedIn() && !familyExists()
+        && getAfter(memberPath()).data.role == 'owner';
+      allow update: if atLeast('owner') && onlyChanges(['name']);
+      allow delete: if false;
+    }
+
+    match /members/{email} {
+      allow get: if signedIn() && email == myEmail();
+      allow read: if isMember();
+      allow create: if (signedIn() && email == myEmail() && !familyExists()
+                        && existsAfter(/databases/$(database)/documents/meta/family)
+                        && request.resource.data.role == 'owner')
+                    || atLeast('owner');
+      // Owners manage everyone; each person may update their own display name / uid link.
+      allow update: if atLeast('owner')
+                    || (isMember() && email == myEmail() && onlyChanges(['name', 'uid']));
+      // Owners can't remove themselves (keeps at least one owner around).
+      allow delete: if atLeast('owner') && email != myEmail();
+    }
+
+    match /recipes/{recipeId} {
+      allow read: if atLeast('viewer');
+      allow create: if atLeast('editor') || (atLeast('contributor') && claimsMe('createdBy'));
+      allow update: if atLeast('editor')
+                    || (atLeast('contributor') && isMine('createdBy') && request.resource.data.createdBy == resource.data.createdBy)
+                    || (atLeast('viewer') && onlyChanges(['favorites']));
+      allow delete: if atLeast('editor') || (atLeast('contributor') && isMine('createdBy'));
+
+      match /comments/{commentId} {
+        allow read: if atLeast('viewer');
+        allow create: if atLeast('viewer') && (claimsMe('by') || atLeast('owner'))
+                      && request.resource.data.text is string && request.resource.data.text.size() < 5000;
+        allow update: if isMember() && isMine('by') && onlyChanges(['text']);
+        allow delete: if atLeast('editor') || (isMember() && isMine('by'));
+      }
+    }
+
+    // Photos are stored as compressed images inside documents (keeps everything on the
+    // free plan - no Cloud Storage bucket needed). Each must stay under Firestore's 1 MB limit.
+    match /photos/{photoId} {
+      allow read: if atLeast('viewer');
+      allow create: if atLeast('viewer') && (claimsMe('by') || atLeast('owner'))
+                    && request.resource.data.data is string && request.resource.data.data.size() < 900000;
+      allow update: if atLeast('editor') || (isMember() && isMine('by') && onlyChanges(['caption']));
+      allow delete: if atLeast('editor') || (isMember() && isMine('by'));
+    }
+
+    // Each person's own grocery list.
+    match /grocery/{uid} {
+      allow read, write: if isMember() && uid == request.auth.uid;
+    }
+  }
+}
