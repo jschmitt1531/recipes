@@ -3,16 +3,16 @@ import { LocalStore, FirebaseStore, ROLES, ROLE_INFO, can } from './store.js';
 import { UNITS, massOf, formatGrams, formatQty, parseNumber, unitLabel } from './units.js';
 import { parseIngredientLine, parseRecipeText } from './parse.js';
 import { addToList, combineQty, AISLE_ORDER, listToText } from './grocery.js';
+import { COURSES, PROTEINS, courseLabel, courseIcon, proteinLabel, proteinIcon, proteinOf, detectProtein } from './categories.js';
 import { compressImage, ocrImage, readWordFile, readTextFile } from './importers.js';
 
-const CATEGORIES = ['Breakfast', 'Appetizer', 'Soup', 'Salad', 'Main', 'Side', 'Bread', 'Dessert', 'Baking', 'Holiday', 'Drinks', 'Sauce', 'Snack', 'Other'];
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const view = $('#view');
 
 const S = {
   store: null, me: null, recipes: [], grocery: [], draft: null,
-  filter: { q: '', show: 'all', cat: '', by: '', sort: 'new' },
+  filter: { q: '', show: 'all', cat: '', protein: '', by: '', sort: 'new' },
   scale: {}, gramsOnly: false, unsub: [],
 };
 
@@ -95,10 +95,11 @@ function renderList() {
       <div class="chips" role="group" aria-label="Show">
         ${[['all', 'All'], ['fav', '♥ My favorites'], ['loved', '★ Family favorites'], ['mine', 'Added by me']].map(([k, l]) => `<button class="chip ${f.show === k ? 'on' : ''}" data-show="${k}">${l}</button>`).join('')}
       </div>
+      <div class="chip-row"><span class="chip-label">Course</span><div class="chips" role="group" aria-label="Course" id="cat-chips"></div></div>
+      <div class="chip-row"><span class="chip-label">Main ingredient</span><div class="chips" role="group" aria-label="Main ingredient" id="pro-chips"></div></div>
       <div class="filters">
-        <select id="cat" aria-label="Category"><option value="">All categories</option>${CATEGORIES.map((c) => `<option ${f.cat === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
         <select id="by" aria-label="Added by"><option value="">Anyone</option>${people.map((p) => `<option ${f.by === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
-        <select id="sort" aria-label="Sort"><option value="new" ${f.sort === 'new' ? 'selected' : ''}>Newest</option><option value="az" ${f.sort === 'az' ? 'selected' : ''}>A–Z</option><option value="loved" ${f.sort === 'loved' ? 'selected' : ''}>Most loved</option><option value="updated" ${f.sort === 'updated' ? 'selected' : ''}>Recently changed</option></select>
+        <select id="sort" aria-label="Sort"><option value="new" ${f.sort === 'new' ? 'selected' : ''}>Newest</option><option value="az" ${f.sort === 'az' ? 'selected' : ''}>A–Z</option><option value="loved" ${f.sort === 'loved' ? 'selected' : ''}>Most loved</option><option value="updated" ${f.sort === 'updated' ? 'selected' : ''}>Recently changed</option><option value="g-course" ${f.sort === 'g-course' ? 'selected' : ''}>Group by course</option><option value="g-protein" ${f.sort === 'g-protein' ? 'selected' : ''}>Group by main ingredient</option></select>
       </div>
     </section>
     <section id="cards" class="cards"></section>`;
@@ -109,27 +110,52 @@ function renderList() {
       if (f.show === 'loved' && favNames(r).length < 2) return false;
       if (f.show === 'mine' && !(r.createdBy && r.createdBy.uid === S.me.uid)) return false;
       if (f.cat && r.category !== f.cat) return false;
+      if (f.protein && proteinOf(r) !== f.protein) return false;
       if (f.by && !(r.createdBy && r.createdBy.name === f.by)) return false;
       if (q) {
-        const hay = [r.title, r.description, r.notes, r.category, (r.tags || []).join(' '), r.source, r.createdBy && r.createdBy.name, ...(r.ingredients || []).map((i) => i.item)].join(' ').toLowerCase();
+        const hay = [r.title, r.description, r.notes, r.category, courseLabel(r.category), proteinLabel(proteinOf(r)), (r.tags || []).join(' '), r.source, r.createdBy && r.createdBy.name, ...(r.ingredients || []).map((i) => i.item)].join(' ').toLowerCase();
         return q.split(/\s+/).every((w) => hay.includes(w));
       }
       return true;
     });
     const by = { new: (a, b) => (b.createdAt || 0) - (a.createdAt || 0), az: (a, b) => (a.title || '').localeCompare(b.title || ''), loved: (a, b) => favNames(b).length - favNames(a).length, updated: (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) };
-    rs.sort(by[f.sort]);
+    rs.sort(by[f.sort] || by.az);
+    drawChips();
     const el = $('#cards');
     if (!S.recipes.length) {
       el.innerHTML = `<div class="empty"><div class="empty-leaf" aria-hidden="true">🍂</div><h2>No recipes yet</h2><p>Snap a photo of a recipe card, open a Word document, or type one in.</p>${can(S.me, 'addRecipe') ? '<a class="btn primary" href="#/add">Add the first recipe</a>' : ''}</div>`;
       return;
     }
     if (!rs.length) { el.innerHTML = '<p class="muted center">No recipes match.</p>'; return; }
-    el.innerHTML = rs.map(card).join('');
+    if (f.sort === 'g-course' || f.sort === 'g-protein') {
+      const course = f.sort === 'g-course';
+      const groups = course ? COURSES.map(([v]) => v) : PROTEINS.map(([v]) => v);
+      const keyOf = (r) => (course ? r.category : proteinOf(r)) || '';
+      const html = [];
+      for (const g of groups.concat([''])) {
+        const items = rs.filter((r) => keyOf(r) === g);
+        if (!items.length) continue;
+        const label = g ? (course ? courseIcon(g) + ' ' + courseLabel(g) : proteinIcon(g) + ' ' + proteinLabel(g)) : (course ? 'No course' : 'No main ingredient');
+        html.push(`<h2 class="group-h">${esc(label)} <span>${items.length}</span></h2>`, ...items.map(card));
+      }
+      el.innerHTML = html.join('');
+    } else el.innerHTML = rs.map(card).join('');
+  };
+  // Chip rows show only the courses / main ingredients that have recipes, with counts.
+  const drawChips = () => {
+    const count = (fn) => S.recipes.reduce((m, r) => { const k = fn(r); if (k) m[k] = (m[k] || 0) + 1; return m; }, {});
+    const cc = count((r) => r.category), pc = count(proteinOf);
+    const chip = (attr, val, on, label, n) => `<button class="chip ${on ? 'on' : ''}" data-${attr}="${esc(val)}">${label}${n != null ? ` <span class="n">${n}</span>` : ''}</button>`;
+    $('#cat-chips').innerHTML = chip('cat', '', !f.cat, 'All') + COURSES.filter(([v]) => cc[v] || f.cat === v).map(([v, l, i]) => chip('cat', v, f.cat === v, `${i} ${esc(l)}`, cc[v] || 0)).join('');
+    $('#pro-chips').innerHTML = chip('pro', '', !f.protein, 'All') + PROTEINS.filter(([v]) => pc[v] || f.protein === v).map(([v, l, i]) => chip('pro', v, f.protein === v, `${i} ${esc(l)}`, pc[v] || 0)).join('');
+    $$('[data-cat]').forEach((b) => b.onclick = () => { f.cat = b.dataset.cat; draw(); });
+    $$('[data-pro]').forEach((b) => b.onclick = () => { f.protein = b.dataset.pro; draw(); });
+    $('#cat-chips').parentElement.hidden = !Object.keys(cc).length && !f.cat;
+    $('#pro-chips').parentElement.hidden = !Object.keys(pc).length && !f.protein;
   };
   draw();
   $('#q').addEventListener('input', (e) => { f.q = e.target.value; draw(); });
   $$('[data-show]').forEach((b) => b.addEventListener('click', () => { f.show = b.dataset.show; $$('[data-show]').forEach((x) => x.classList.toggle('on', x === b)); draw(); }));
-  $('#cat').onchange = (e) => { f.cat = e.target.value; draw(); };
   $('#by').onchange = (e) => { f.by = e.target.value; draw(); };
   $('#sort').onchange = (e) => { f.sort = e.target.value; draw(); };
   renderList.redraw = draw;
@@ -142,7 +168,7 @@ function card(r) {
       ${names.length >= 2 ? '<span class="ribbon">★ Family favorite</span>' : ''}</div>
     <div class="card-body">
       <h3>${esc(r.title || 'Untitled recipe')}</h3>
-      <p class="meta">${r.category ? `<span class="tag">${esc(r.category)}</span>` : ''} ${r.createdBy ? `by <b>${esc(r.createdBy.name)}</b>` : ''}</p>
+      <p class="meta">${r.category ? `<span class="tag">${esc(courseIcon(r.category) + ' ' + courseLabel(r.category))}</span>` : ''} ${proteinOf(r) ? `<span class="tag alt">${esc(proteinIcon(proteinOf(r)) + ' ' + proteinLabel(proteinOf(r)))}</span>` : ''} ${r.createdBy ? `by <b>${esc(r.createdBy.name)}</b>` : ''}</p>
       ${names.length ? `<p class="loved"><span class="heart ${mine ? 'on' : ''}" aria-hidden="true">♥</span> ${esc(names.slice(0, 3).join(', '))}${names.length > 3 ? ` +${names.length - 3}` : ''}</p>` : ''}
     </div></a>`;
 }
@@ -178,7 +204,7 @@ function renderRecipe(id) {
         <a class="back" href="#/" aria-label="Back to recipes">‹</a>
       </div>
       <header class="r-head">
-        <p class="eyebrow">${esc(r.category || '')}${(r.tags || []).length ? ' · ' + (r.tags || []).map(esc).join(', ') : ''}</p>
+        <p class="eyebrow">${esc([r.category && courseLabel(r.category), proteinOf(r) && proteinLabel(proteinOf(r))].filter(Boolean).join(' · '))}${(r.tags || []).length ? ' · ' + (r.tags || []).map(esc).join(', ') : ''}</p>
         <h1>${esc(r.title)}</h1>
         ${r.description ? `<p class="lede">${esc(r.description)}</p>` : ''}
         <p class="byline">${avatar(r.createdBy && r.createdBy.name)} Shared by <b>${esc(r.createdBy ? r.createdBy.name : 'someone')}</b> · ${esc(when(r.createdAt))}${r.updatedBy && r.updatedAt !== r.createdAt ? ` · edited by ${esc(r.updatedBy.name)} ${esc(when(r.updatedAt))}` : ''}</p>
@@ -433,8 +459,11 @@ function renderEditor(id) {
         <label>Title<input name="title" required value="${esc(r.title)}" placeholder="Grandma's Apple Pie"></label>
         <label>Short description<textarea name="description" rows="2" placeholder="The one we make every Thanksgiving">${esc(r.description)}</textarea></label>
         <div class="row3">
-          <label>Category<select name="category"><option value="">—</option>${CATEGORIES.map((c) => `<option ${r.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+          <label>Course<select name="category"><option value="">—</option>${COURSES.map(([v, l]) => `<option value="${v}" ${r.category === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>Main ingredient<select name="protein"><option value="">Auto${detectProtein(r) ? ' (' + esc(proteinLabel(detectProtein(r))) + ')' : ''}</option>${PROTEINS.map(([v, l, i]) => `<option value="${v}" ${r.protein === v ? 'selected' : ''}>${i} ${l}</option>`).join('')}</select></label>
           <label>Servings<input name="servings" inputmode="decimal" value="${esc(r.servings ?? '')}"></label>
+        </div>
+        <div>
           <label>Tags<input name="tags" value="${esc((r.tags || []).join(', '))}" placeholder="pie, fall"></label>
         </div>
         <div class="row3">
@@ -483,6 +512,7 @@ function renderEditor(id) {
     const fd = new FormData(form);
     for (const k of ['title', 'description', 'category', 'prepTime', 'cookTime', 'source', 'notes']) r[k] = (fd.get(k) || '').toString();
     r.servings = parseNumber(fd.get('servings')) || null;
+    r.protein = (fd.get('protein') || '').toString();
     r.tags = (fd.get('tags') || '').toString().split(',').map((s) => s.trim()).filter(Boolean);
     r.ingredients = $$('.ing-row', form).map((row) => {
       const v = (f) => $(`[data-f="${f}"]`, row).value.trim();
@@ -500,6 +530,12 @@ function renderEditor(id) {
     const v = (f) => $(`[data-f="${f}"]`, row).value;
     const m = massOf({ qty: parseNumber(v('qty').split(/\s*(?:-|–|to)\s*/)[0]), unit: v('unit'), item: v('item'), note: v('note') });
     $('[data-f="grams"]', row).placeholder = m.grams != null ? '≈' + Math.round(m.grams) : 'g';
+  });
+  // keep the "Auto (…)" main-ingredient guess current as the course, title or ingredients change
+  form.addEventListener('change', () => {
+    sync();
+    const d = detectProtein(r);
+    $('select[name=protein] option[value=""]', form).textContent = 'Auto' + (d ? ` (${proteinLabel(d)})` : '');
   });
   // a quick-typed full line in the item box ("2 cups sugar") gets split up
   form.addEventListener('change', (e) => {
@@ -707,7 +743,7 @@ function renderGate(phase) {
     const local = st.mode === 'local';
     view.innerHTML = `<form class="gate-card" id="setup"><div class="logo-big" aria-hidden="true">🍁</div><h1>Welcome!</h1>
       <p>${local ? 'Let\'s set up your recipe book.' : 'You\'re the first one here, so you\'ll be the family <b>owner</b> — you decide who can see and edit recipes.'}</p>
-      <label>Family name<input name="fam" required value="The ${esc((st.me.name || '').split(' ').slice(-1)[0] || 'Family')} Family Kitchen"></label>
+      <label>Family name<input name="fam" required value="${(st.me.name || '').trim().split(/\s+/).length > 1 ? 'The ' + esc(st.me.name.trim().split(/\s+/).pop()) + ' Family Kitchen' : 'Our Family Kitchen'}"></label>
       <label>Your name (shown on recipes you share)<input name="me" required value="${esc(st.me.name || '')}" placeholder="Mom"></label>
       <button class="btn primary big">Start</button></form>`;
     $('#setup').onsubmit = async (e) => {

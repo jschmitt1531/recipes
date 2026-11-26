@@ -114,13 +114,21 @@ label > input, label > select, label > textarea { margin-top: 4px; font-weight: 
 .avatar.a0 { background: #9A4416; } .avatar.a1 { background: #9B2335; } .avatar.a2 { background: #5F6B2E; } .avatar.a3 { background: #A86E12; } .avatar.a4 { background: #6B4A3A; }
 
 /* list */
-.list-head { position: sticky; top: 58px; z-index: 5; background: var(--bg); padding: 4px 0 10px; margin: 0 -16px; padding-inline: 16px; }
+.list-head { padding: 4px 0 10px; }
+.chip-row { display: flex; align-items: center; gap: 8px; }
+.chip-row[hidden] { display: none; }
+.chip-label { flex: none; width: 76px; font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--olive); line-height: 1.15; }
+.chip-row .chips { padding: 4px 0; flex: 1; min-width: 0; }
+.chip .n { font-size: .72rem; opacity: .75; margin-left: 2px; }
+.group-h { grid-column: 1 / -1; margin: 10px 0 0; font-size: 1.15rem; border-bottom: 2px solid var(--mustard); padding-bottom: 4px; }
+.group-h span { font: 700 .8rem var(--body); color: var(--muted); }
+.tag.alt { background: var(--surface-2); color: var(--olive); }
 .search { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1.5px solid var(--border); border-radius: 999px; padding: 0 14px; }
 .search input { border: 0; box-shadow: none; background: transparent; padding-left: 0; }
 .chips { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 6px; scrollbar-width: none; }
 .chip { flex: none; border: 1.5px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 14px; font: 700 .85rem var(--body); cursor: pointer; min-height: 36px; }
 .chip.on { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
-.filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.filters { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 6px; }
 .filters select { min-height: 38px; padding: 6px 8px; font-size: .9rem; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
 @media (max-width: 480px) { .cards { grid-template-columns: 1fr 1fr; gap: 10px; } }

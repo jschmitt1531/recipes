@@ -1,6 +1,7 @@
 // node family-recipes/tests/run.mjs
 import { parseNumber, formatQty, massOf, normalizeUnit, formatGrams } from '../js/units.js';
 import { parseIngredientLine, parseRecipeText, splitSteps } from '../js/parse.js';
+import { detectProtein, proteinOf, COURSES, PROTEINS } from '../js/categories.js';
 import { addToList, combineQty, aisleFor, itemKey, AISLE_ORDER } from '../js/grocery.js';
 
 let pass = 0, fail = 0;
@@ -129,6 +130,21 @@ t('grocery merges across recipes and units', () => {
 });
 t('aisles', () => { eq(aisleFor('cold butter'), 'Dairy & Eggs'); eq(aisleFor('apples'), 'Produce'); eq(aisleFor('cinnamon'), 'Spices & Seasonings'); eq(aisleFor('brown sugar'), 'Baking'); eq(aisleFor('apple cider'), 'Drinks'); eq(aisleFor('apple cider vinegar'), 'Oils, Vinegars & Condiments'); eq(itemKey('all-purpose flour'), itemKey('flour')); });
 t('aisle order covers every aisle once', () => { eq(new Set(AISLE_ORDER).size, AISLE_ORDER.length); });
+
+t('main ingredient auto-detect', () => {
+  eq(detectProtein({ title: 'Lemon Herb Chicken', ingredients: [] }), 'chicken');
+  eq(detectProtein({ title: 'Sunday Dinner', ingredients: [{ item: '2 lb chuck roast' }, { item: 'beef broth' }] }), 'beef');
+  eq(detectProtein({ title: 'Grilled Ribeye', ingredients: [{ item: 'butter' }] }), 'beef');
+  eq(detectProtein({ title: 'Garlic Shrimp Pasta', ingredients: [] }), 'fish');
+  eq(detectProtein({ title: 'Risotto', ingredients: [{ item: 'arborio rice' }, { item: 'chicken broth' }] }), '');
+  eq(detectProtein({ title: 'Veggie Chili', ingredients: [{ item: 'black beans' }, { item: 'vegetable broth' }] }), 'vegetarian');
+  eq(detectProtein({ title: 'Apple Crisp', category: 'Dessert', ingredients: [{ item: 'apples' }] }), '');
+  eq(detectProtein({ title: 'Carbonara', ingredients: [{ item: 'spaghetti' }, { item: 'pancetta' }] }), 'pork');
+  eq(proteinOf({ protein: 'turkey', title: 'Chicken Soup' }), 'turkey');
+});
+t('course and ingredient lists have unique values', () => {
+  eq(new Set(COURSES.map((c) => c[0])).size, COURSES.length); eq(new Set(PROTEINS.map((c) => c[0])).size, PROTEINS.length);
+});
 
 console.log(`\n${pass}/${pass + fail} tests passed`);
 process.exit(fail ? 1 : 0);

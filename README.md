@@ -9,6 +9,7 @@ A shared family recipe book that works like an app on phones, tablets and comput
 - **Notes, photos and comments:** anyone can add a photo of how theirs turned out and leave comments.
 - **Favorites:** ♥ a recipe and everyone sees who loves it. Recipes loved by two or more people get a ★ *Family favorite* ribbon.
 - **Who shared it:** every recipe shows who added it and who last edited it, with a change history.
+- **Sort and filter:** tap a **course** (Appetizers, Breads, Mains, Desserts, Soups, Sides…) or a **main ingredient** (Chicken, Beef & Steak, Pork, Fish & Seafood, Turkey, Lamb, Vegetarian…) to filter, or choose *Group by course* / *Group by main ingredient*. The main ingredient is detected automatically from the title and ingredients (chicken broth alone doesn't count as chicken, and doesn't count as vegetarian either). You can change it in the editor.
 - **Grocery list:** tick the ingredients you need and tap *Add to grocery list*. Amounts from different recipes are combined (including grams) and sorted by store aisle. Share the list by text.
 - **Family access levels:** Owner, Editor, Contributor and Viewer (see below).
 - **Works offline** once it has been opened, and can be installed on the home screen.
@@ -71,6 +72,7 @@ These are enforced by `firestore.rules` on Google's servers, not just hidden in 
 | `js/store.js` | Data: `LocalStore` (this device) and `FirebaseStore` (shared), roles |
 | `js/units.js` | Units, fractions, scaling and the grams engine (ingredient density chart) |
 | `js/parse.js` | Turns pasted, OCR or Word text into title, ingredients, steps and notes |
+| `js/categories.js` | Courses and main ingredients, with auto-detection |
 | `js/grocery.js` | Combining ingredients and sorting them by aisle |
 | `js/importers.js` | Photo OCR (Tesseract.js), Word (mammoth.js), image compression |
 | `firestore.rules` | Security rules for the shared database |
