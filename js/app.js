@@ -459,7 +459,7 @@ function renderAdd() {
 
 // A Word file with many recipes: review the list, then import them all at once.
 // `source` is either the recipes split out of a Word file, or a recipe file (JSON pack with photos).
-function renderCookbook(source, fileName) {
+function renderCookbook(source, fileName, auto = false) {
   const have = new Set(S.recipes.map((r) => (r.title || '').trim().toLowerCase()));
   const isPack = !Array.isArray(source);
   const items = (isPack ? source.recipes : source).map((c) => {
@@ -528,6 +528,10 @@ function renderCookbook(source, fileName) {
     };
   };
   draw();
+  if (auto) {
+    if (items.some((x) => x.on)) $('#cb-go').click();
+    else { toast('All of these recipes are already in your book.', 4000); go('#/'); }
+  }
 }
 
 // ------------------------------------------------------------- editor -----
@@ -941,7 +945,7 @@ async function start() {
   let first = true;
   S.store.subscribeRecipes((rs) => {
     S.recipes = rs;
-    if (first) { first = false; route(); return; }
+    if (first) { first = false; route(); if (pendingImport.get()) runStarterImport(); return; }
     // live update: refresh the current screen unless the person is typing in the editor
     const h = location.hash;
     if (h.startsWith('#/r/')) {
@@ -949,7 +953,7 @@ async function start() {
       renderRecipe(h.slice(4));
       if (keep && $('#ctext')) $('#ctext').value = keep;
       window.scrollTo(0, y);
-    } else if ((h === '' || h === '#/' || h === '#') && renderList.redraw) renderList.redraw();
+    } else if ((h === '' || h === '#/' || h === '#') && renderList.redraw && $('#cards')) renderList.redraw();
   });
   window.addEventListener('hashchange', route);
 }
@@ -959,6 +963,31 @@ const pendingInvite = {
   get() { try { return localStorage.getItem(INVITE_KEY) || ''; } catch { return S.invite || ''; } },
   set(v) { S.invite = v; try { if (v) localStorage.setItem(INVITE_KEY, v); else localStorage.removeItem(INVITE_KEY); } catch { /* private mode */ } },
 };
+const IMPORT_KEY = 'family-recipes-import';
+const pendingImport = {
+  get() { try { return sessionStorage.getItem(IMPORT_KEY) || S.importKey || ''; } catch { return S.importKey || ''; } },
+  set(v) { S.importKey = v; try { if (v) sessionStorage.setItem(IMPORT_KEY, v); else sessionStorage.removeItem(IMPORT_KEY); } catch { /* private mode */ } },
+};
+// Decrypt starter.enc (AES-256-GCM: 12-byte IV, then ciphertext + tag) with the key from the link.
+async function runStarterImport() {
+  const key = pendingImport.get();
+  pendingImport.set('');
+  if (!key) return;
+  if (!can(S.me, 'addRecipe')) { toast('Only family members who can add recipes can use the import link.', 6000); return; }
+  view.innerHTML = '<p class="center muted loading">Unlocking the family recipes…</p>';
+  try {
+    const buf = new Uint8Array(await (await fetch('starter.enc', { cache: 'no-store' })).arrayBuffer());
+    const raw = Uint8Array.from(atob(key.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const ck = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, ck, buf.slice(12));
+    const pack = JSON.parse(new TextDecoder().decode(plain));
+    renderCookbook(pack, 'the family starter recipes', true);
+  } catch (e) {
+    console.error(e);
+    toast('That import link didn\'t work. Ask for a new one.', 6000);
+    go('#/');
+  }
+}
 async function handlePhase(p) {
   if (p.phase === 'notmember' && pendingInvite.get()) {
     const code = pendingInvite.get();
@@ -971,6 +1000,9 @@ async function handlePhase(p) {
 async function boot() {
   const m = location.hash.match(/^#\/join\/([a-z0-9]{10,40})$/i);
   if (m) { pendingInvite.set(m[1]); history.replaceState(null, '', location.pathname + location.search + '#/'); }
+  // "#/import/<key>": a one-tap link that loads the encrypted family starter recipes
+  const k = location.hash.match(/^#\/import\/([A-Za-z0-9_-]{40,60})$/);
+  if (k) { pendingImport.set(k[1]); history.replaceState(null, '', location.pathname + location.search + '#/'); }
   S.store = firebaseConfig ? new FirebaseStore(firebaseConfig) : new LocalStore();
   let phase;
   try { phase = await S.store.init((p) => handlePhase(p)); }
