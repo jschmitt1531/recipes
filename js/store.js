@@ -133,6 +133,10 @@ export class LocalStore {
   async deletePhoto(rid, pid) { await tx(this.db, 'photos', 'readwrite', (s) => s.delete(pid)); this._emitSub('photos', rid); }
   subscribeMembers(cb) { cb([{ email: '', name: this.me.name, role: 'owner', you: true }]); return () => {}; }
   async setMember() { throw new Error('Connect Firebase (see the Family tab) to invite family members.'); }
+  subscribeInvites(cb) { cb([]); return () => {}; }
+  async createInvites() { throw new Error('Connect Firebase (see the Family tab) to invite family members.'); }
+  async deleteInvite() {}
+  async claimInvite() { return { phase: 'ready' }; }
   async removeMember() {}
   async getGrocery() { return (await this._kv('grocery')) || []; }
   async saveGrocery(list) { await this._kv('grocery', list); }
@@ -159,7 +163,13 @@ export class FirebaseStore {
     try {
       this.db = fsM.initializeFirestore(app, { localCache: fsM.persistentLocalCache({ tabManager: fsM.persistentMultipleTabManager() }) });
     } catch { this.db = fsM.getFirestore(app); }
+    // Local testing against the Firebase emulators (set emulator: true in config).
+    if (this.config.emulator) {
+      authM.connectAuthEmulator(this.auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+      fsM.connectFirestoreEmulator(this.db, '127.0.0.1', 8080);
+    }
     authM.getRedirectResult(this.auth).catch(() => {});
+    this.onPhase = onPhase;
     return new Promise((resolve) => {
       let first = true;
       authM.onAuthStateChanged(this.auth, async (user) => {
@@ -171,6 +181,9 @@ export class FirebaseStore {
   async _phaseFor(user) {
     this.user = user;
     if (!user) return { phase: 'signin' };
+    // Email + password accounts must confirm their address once, so nobody can
+    // sign up with a relative's email and get their access.
+    if (!user.emailVerified) { this.me = { uid: user.uid, email: user.email, name: user.displayName || '', role: null }; return { phase: 'verify' }; }
     const { doc, getDoc, setDoc } = this.F;
     const email = (user.email || '').toLowerCase();
     let famSnap;
@@ -199,6 +212,26 @@ export class FirebaseStore {
       if (/popup-blocked|operation-not-supported|popup-closed-by-user/.test(e.code || '') && e.code !== 'auth/popup-closed-by-user') return signInWithRedirect(this.auth, p);
       throw e;
     }
+  }
+  // ---- email + password (works everywhere, including iPhone home-screen apps)
+  async signInEmail(email, password) {
+    await this.A.signInWithEmailAndPassword(this.auth, String(email).trim(), password);
+  }
+  async signUpEmail(email, password, name) {
+    const cred = await this.A.createUserWithEmailAndPassword(this.auth, String(email).trim(), password);
+    if (name) await this.A.updateProfile(cred.user, { displayName: name });
+    await this.A.sendEmailVerification(cred.user, { url: location.href.split('#')[0] });
+  }
+  async resendVerification() { await this.A.sendEmailVerification(this.auth.currentUser, { url: location.href.split('#')[0] }); }
+  async resetPassword(email) { await this.A.sendPasswordResetEmail(this.auth, String(email).trim()); }
+  // After tapping the link in the email: refresh the account and carry on.
+  async checkVerified() {
+    const u = this.auth.currentUser;
+    if (!u) return { phase: 'signin' };
+    await u.reload();
+    if (!this.auth.currentUser.emailVerified) return { phase: 'verify' };
+    await this.auth.currentUser.getIdToken(true);
+    return this._phaseFor(this.auth.currentUser);
   }
   async signOut() { await this.A.signOut(this.auth); location.hash = '#/'; location.reload(); }
   async setupFamily(familyName, myName) {
@@ -243,7 +276,7 @@ export class FirebaseStore {
   }
   subscribeComments(rid, cb) {
     const { collection, onSnapshot } = this.F;
-    return onSnapshot(collection(this.db, 'recipes', rid, 'comments'), (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id })).sort((a, b) => a.at - b.at)));
+    return onSnapshot(collection(this.db, 'recipes', rid, 'comments'), (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id })).sort((a, b) => a.at - b.at)), (e) => { console.error('comments', e); cb([]); });
   }
   async addComment(rid, text) {
     await this.F.addDoc(this.F.collection(this.db, 'recipes', rid, 'comments'), { text, at: Date.now(), by: { uid: this.me.uid, name: this.me.name } });
@@ -251,7 +284,7 @@ export class FirebaseStore {
   async deleteComment(rid, cid) { await this.F.deleteDoc(this.F.doc(this.db, 'recipes', rid, 'comments', cid)); }
   subscribePhotos(rid, cb) {
     const { collection, onSnapshot, query, where } = this.F;
-    return onSnapshot(query(collection(this.db, 'photos'), where('recipeId', '==', rid)), (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id })).sort((a, b) => a.at - b.at)));
+    return onSnapshot(query(collection(this.db, 'photos'), where('recipeId', '==', rid)), (s) => cb(s.docs.map((d) => ({ ...d.data(), id: d.id })).sort((a, b) => a.at - b.at)), (e) => { console.error('photos', e); cb([]); });
   }
   async addPhoto(rid, { data, caption = '', kind = 'dish' }) {
     const ref = await this.F.addDoc(this.F.collection(this.db, 'photos'), { recipeId: rid, data, caption, kind, at: Date.now(), by: { uid: this.me.uid, name: this.me.name } });
@@ -269,6 +302,39 @@ export class FirebaseStore {
     await this.F.setDoc(this.F.doc(this.db, 'members', e), { name: name || e.split('@')[0], role, addedBy: this.me.name, addedAt: Date.now() }, { merge: true });
   }
   async removeMember(email) { await this.F.deleteDoc(this.F.doc(this.db, 'members', email)); }
+  // ---- invite links
+  subscribeInvites(cb) {
+    const { collection, onSnapshot } = this.F;
+    return onSnapshot(collection(this.db, 'invites'), (s) => cb(s.docs.map((d) => ({ ...d.data(), code: d.id })).sort((a, b) => a.createdAt - b.createdAt)));
+  }
+  async createInvites(people) {
+    const { doc, writeBatch } = this.F;
+    const b = writeBatch(this.db);
+    const codes = [];
+    const now = Date.now();
+    for (const [i, p] of people.entries()) {
+      if (!ROLES.includes(p.role) || p.role === 'owner') throw new Error('Invite links can be Editor, Contributor or Viewer.');
+      const code = Array.from(crypto.getRandomValues(new Uint8Array(15)), (x) => 'abcdefghjkmnpqrstuvwxyz23456789'[x % 31]).join('');
+      b.set(doc(this.db, 'invites', code), { name: p.name, role: p.role, createdBy: this.me.name, createdAt: now + i, usedBy: null });
+      codes.push(code);
+    }
+    await b.commit();
+    return codes;
+  }
+  async deleteInvite(code) { await this.F.deleteDoc(this.F.doc(this.db, 'invites', code)); }
+  // Signed in but not on the family list yet: join with an invite code.
+  async claimInvite(code) {
+    const { doc, getDoc, writeBatch } = this.F;
+    const snap = await getDoc(doc(this.db, 'invites', code)).catch(() => null);
+    if (!snap || !snap.exists()) throw new Error('That invite link isn\'t valid any more. Ask for a new one.');
+    const inv = snap.data();
+    if (inv.usedBy && inv.usedBy !== this.me.email) throw new Error('That invite link was already used. Ask for a new one.');
+    const b = writeBatch(this.db);
+    b.set(doc(this.db, 'members', this.me.email), { name: inv.name, role: inv.role, uid: this.me.uid, invite: code, addedBy: inv.createdBy || '', addedAt: Date.now() });
+    b.update(doc(this.db, 'invites', code), { usedBy: this.me.email, usedAt: Date.now() });
+    await b.commit();
+    return this._phaseFor(this.auth.currentUser);
+  }
   async getGrocery() {
     const s = await this.F.getDoc(this.F.doc(this.db, 'grocery', this.me.uid));
     return s.exists() ? s.data().items || [] : [];

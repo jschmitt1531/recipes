@@ -47,6 +47,14 @@ function friendlyError(e) {
   const c = (e && e.code) || '';
   if (/permission-denied/.test(c)) return "You don't have permission to do that. Ask the family owner.";
   if (/unavailable|network/.test(c)) return "You're offline. It will sync when you're back online.";
+  if (/wrong-password|invalid-credential|user-not-found|invalid-login/.test(c)) return 'That email and password don\'t match. Try again, or tap "Forgot password?".';
+  if (/email-already-in-use/.test(c)) return 'There is already an account with that email — tap "Sign in" instead.';
+  if (/weak-password/.test(c)) return 'Please use a password with at least 6 characters.';
+  if (/invalid-email/.test(c)) return 'That email address doesn\'t look right.';
+  if (/too-many-requests/.test(c)) return 'Too many tries. Wait a minute and try again.';
+  if (/popup-closed|cancelled-popup/.test(c)) return 'Sign-in was closed before it finished.';
+  if (/unauthorized-domain/.test(c)) return 'This web address isn\'t allowed to sign in yet. The owner needs to add it in Firebase → Authentication → Settings → Authorized domains.';
+  if (/operation-not-allowed/.test(c)) return 'This sign-in method is turned off. The owner needs to enable it in Firebase → Authentication → Sign-in method.';
   return (e && e.message) || 'Something went wrong.';
 }
 function pickFile(accept, capture) {
@@ -390,7 +398,7 @@ function renderAdd() {
     <h1 class="page-title">Add a recipe</h1>
     <div class="add-grid">
       <button class="add-tile" id="a-photo"><span aria-hidden="true">📸</span><b>Photo of a recipe</b><small>Recipe card, cookbook page, screenshot. The text is read for you.</small></button>
-      <button class="add-tile" id="a-word"><span aria-hidden="true">📄</span><b>Word document</b><small>.docx files (also .txt)</small></button>
+      <button class="add-tile" id="a-word"><span aria-hidden="true">📄</span><b>Word or recipe file</b><small>A Word cookbook (.docx), or a recipe file someone sent you</small></button>
       <button class="add-tile" id="a-paste"><span aria-hidden="true">📋</span><b>Paste text</b><small>From an email, website or note</small></button>
       <a class="add-tile" href="#/new"><span aria-hidden="true">✍️</span><b>Type it in</b><small>Start with a blank recipe</small></a>
     </div>
@@ -419,9 +427,14 @@ function renderAdd() {
     }
   };
   $('#a-word').onclick = async () => {
-    const file = await pickFile('.docx,.doc,.txt,.md,.rtf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain');
+    const file = await pickFile('.docx,.doc,.txt,.md,.json,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain');
     if (!file) return;
     original = null;
+    if (/\.json$/i.test(file.name)) {
+      let pack; try { pack = JSON.parse(await file.text()); } catch { return toast('That file could not be read.'); }
+      if (!pack || pack.app !== 'family-recipes' || !Array.isArray(pack.recipes)) return toast('That is not a Family Recipes file.');
+      return renderCookbook(pack, file.name);
+    }
     if (/\.(txt|md)$/i.test(file.name)) {
       const text = await guard(() => readTextFile(file));
       if (text != null) { show(); $('#ex-img').hidden = true; $('#ex-text').value = text.trim(); }
@@ -445,20 +458,31 @@ function renderAdd() {
 }
 
 // A Word file with many recipes: review the list, then import them all at once.
-function renderCookbook(book, fileName) {
+// `source` is either the recipes split out of a Word file, or a recipe file (JSON pack with photos).
+function renderCookbook(source, fileName) {
   const have = new Set(S.recipes.map((r) => (r.title || '').trim().toLowerCase()));
-  const items = book.map((c) => {
-    const r = parseRecipeText(c.text, { title: c.title, paragraphs: true });
-    const course = detectCourse(r);
-    delete r.courseHint;
+  const isPack = !Array.isArray(source);
+  const items = (isPack ? source.recipes : source).map((c) => {
+    let r, photos = [];
+    if (isPack) {
+      const { id, createdAt, createdBy, updatedAt, updatedBy, history, favorites, coverPhotoId, ...rest } = c;
+      r = { ...rest, ingredients: rest.ingredients || [], steps: rest.steps || [] };
+      photos = (source.photos || []).filter((p) => p.recipeId === id).map(({ data, caption, kind }) => ({ data, caption: caption || '', kind: kind || 'dish' }));
+      if (!r.category) r.category = detectCourse(r);
+    } else {
+      r = parseRecipeText(c.text, { title: c.title, paragraphs: true });
+      r.category = detectCourse(r);
+      delete r.courseHint;
+    }
     const empty = !r.ingredients.length && !r.steps.length;
-    return { r: { ...blankRecipe(), ...r, servings: r.servings || null, category: course }, empty, dupe: have.has(r.title.trim().toLowerCase()), on: !have.has(r.title.trim().toLowerCase()) };
+    const dupe = have.has(String(r.title || '').trim().toLowerCase());
+    return { r: { ...blankRecipe(), ...r, servings: r.servings || null }, photos, empty, dupe, on: !dupe };
   });
   const courseOpts = (v) => `<option value="">—</option>${COURSES.map(([c, l]) => `<option value="${c}" ${v === c ? 'selected' : ''}>${l}</option>`).join('')}`;
   const draw = () => {
     const n = items.filter((x) => x.on).length;
     view.innerHTML = `
-      <div class="page-head"><h1 class="page-title">Import cookbook</h1><a class="link" href="#/add">Cancel</a></div>
+      <div class="page-head"><h1 class="page-title">${isPack ? 'Import recipes' : 'Import cookbook'}</h1><a class="link" href="#/add">Cancel</a></div>
       <p>Found <b>${items.length} recipes</b> in <b>${esc(fileName)}</b>. Check the course and whose recipe each one is. You can fix the details of any recipe later with <b>Edit</b>.</p>
       <p class="btn-row"><button class="btn primary big" id="cb-go" ${n ? '' : 'disabled'}>Import ${n} recipe${n === 1 ? '' : 's'}</button> <button class="btn" id="cb-all">${n === items.length ? 'Select none' : 'Select all'}</button></p>
       <ul class="cb-list">${items.map((x, i) => `<li class="cb ${x.on ? '' : 'off'}">
@@ -469,7 +493,8 @@ function renderCookbook(book, fileName) {
             <select data-f="category" data-i="${i}" aria-label="Course">${courseOpts(x.r.category)}</select>
             <input data-f="from" data-i="${i}" value="${esc(x.r.from)}" placeholder="Whose recipe?" aria-label="Whose recipe">
           </div>
-          <p class="small muted">${proteinOf(x.r) ? esc(proteinIcon(proteinOf(x.r)) + ' ' + proteinLabel(proteinOf(x.r))) + ' · ' : ''}${x.r.ingredients.length} ingredients · ${x.r.steps.length} step${x.r.steps.length === 1 ? '' : 's'}
+          ${x.r.thumb ? `<img class="cb-thumb" src="${esc(x.r.thumb)}" alt="">` : ''}
+          <p class="small muted">${x.photos.length ? `📷 ${x.photos.length} photo${x.photos.length === 1 ? '' : 's'} · ` : ''}${proteinOf(x.r) ? esc(proteinIcon(proteinOf(x.r)) + ' ' + proteinLabel(proteinOf(x.r))) + ' · ' : ''}${x.r.ingredients.length} ingredients · ${x.r.steps.length} step${x.r.steps.length === 1 ? '' : 's'}
             ${x.empty ? ' · <b class="warn-t">only a title so far — saved as a placeholder to fill in</b>' : ''}${x.dupe ? ' · <b class="warn-t">already in your recipes</b>' : ''}</p>
           <details><summary class="small">Preview</summary><div class="cb-prev small">
             ${x.r.ingredients.length ? `<ul>${x.r.ingredients.map((g) => `<li>${esc(qtyText(g.qty, g.qtyMax, g.unit))} ${esc(g.unit ? unitLabel(g.unit, g.qty) : '')} ${esc(g.item)}${g.note ? ` <span class="muted">(${esc(g.note)})</span>` : ''}</li>`).join('')}</ul>` : ''}
@@ -487,9 +512,14 @@ function renderCookbook(book, fileName) {
         const rec = { ...x.r, favorites: {} };
         if (x.empty && !rec.notes) rec.notes = 'Only the name was in the cookbook. Tap Edit to add the ingredients and steps.';
         rec.ingredients = rec.ingredients.map(({ raw, ...g }) => g);
-        if (!rec.source) rec.source = fileName.replace(/\.docx$/i, '');
-        const ok = await guard(() => S.store.saveRecipe(rec));
-        if (ok) done++;
+        if (!rec.source && !isPack) rec.source = fileName.replace(/\.docx$/i, '');
+        const rid = await guard(() => S.store.saveRecipe(rec));
+        if (rid) {
+          done++;
+          let first = null;
+          for (const ph of x.photos) { const pid = await guard(() => S.store.addPhoto(rid, ph)); if (pid && !first) first = pid; }
+          if (first && rec.thumb) await guard(() => S.store.patchRecipe(rid, { coverPhotoId: first }));
+        }
         btn.textContent = `Importing… ${done}/${chosen.length}`;
       }
       toast(`Imported ${done} recipe${done === 1 ? '' : 's'}`);
@@ -728,15 +758,25 @@ function renderFamily() {
       <h2>Family members</h2>
       <div id="members"></div>
       ${can(me, 'manageMembers') ? `
-        <form id="invite" class="invite">
-          <h3>Add a family member</h3>
+        <div class="invite">
+          <h3>Invite family with a link</h3>
+          <p class="small muted">Each person gets their own link. They tap it, sign in with any email, and they're in. Each link works once, so nobody else can join.</p>
+          <div id="invites"></div>
+          <form id="mkinv">
+            <label>Names, one per line<textarea name="names" rows="4" placeholder="Nanny (Lisa)&#10;Granddad (Karl)&#10;Mom (Jennifer)"></textarea></label>
+            <label>What can they do?<select name="role">${ROLES.filter((r) => r !== 'owner').map((r) => `<option value="${r}" ${r === 'editor' ? 'selected' : ''}>${cap(r)} — ${esc(ROLE_INFO[r])}</option>`).join('')}</select></label>
+            <button class="btn primary">Make invite links</button>
+          </form>
+        </div>
+        <details class="invite"><summary>Or add someone by email address</summary>
+        <form id="invite">
           <div class="row3">
-            <label>Their Google email<input name="email" type="email" required placeholder="aunt.may@gmail.com"></label>
+            <label>Their email<input name="email" type="email" required placeholder="aunt.may@gmail.com"></label>
             <label>Name shown in the app<input name="name" placeholder="Aunt May"></label>
             <label>Access<select name="role">${ROLES.map((r) => `<option value="${r}" ${r === 'contributor' ? 'selected' : ''}>${cap(r)}</option>`).join('')}</select></label>
           </div>
           <p><button class="btn primary">Add member</button> <button type="button" class="btn" id="copy-invite">Copy invite message</button></p>
-        </form>` : ''}
+        </form></details>` : ''}
       <details><summary>What each access level can do</summary><dl class="roles">${ROLES.map((r) => `<dt>${cap(r)}</dt><dd>${esc(ROLE_INFO[r])}</dd>`).join('')}</dl></details>
     </section>` : `
     <section class="panel warn">
@@ -781,13 +821,41 @@ function renderFamily() {
       $$('[data-role]', el).forEach((s) => s.onchange = () => { const m = ms.find((x) => x.email === s.dataset.role); guard(() => st.setMember(m.email, { name: m.name, role: s.value }), 'Access updated'); });
       $$('[data-rmm]', el).forEach((b) => b.onclick = () => confirm('Remove this person from the family app?') && guard(() => st.removeMember(b.dataset.rmm), 'Removed'));
     }));
+    const mk = $('#mkinv');
+    if (mk) {
+      const inviteUrl = (code) => `${appUrl}#/join/${code}`;
+      const inviteText = (i) => `Hi ${i.name}! You're invited to our family recipe book "${st.family.name}". Tap this link, then sign in or create an account: ${inviteUrl(i.code)}\n\nOn your phone, use "Add to Home Screen" to keep it like an app.`;
+      S.unsub.push(st.subscribeInvites((list) => {
+        const el = $('#invites'); if (!el) return;
+        const open = list.filter((i) => !i.usedBy);
+        el.innerHTML = open.length ? `<ul class="members">${open.map((i) => `<li>${avatar(i.name)}<div><b>${esc(i.name)}</b><br><span class="muted small">${esc(cap(i.role))} · not joined yet</span></div>
+          <button class="btn" data-share="${esc(i.code)}">Send link</button><button class="link danger" data-delinv="${esc(i.code)}" aria-label="Cancel invite for ${esc(i.name)}">✕</button></li>`).join('')}</ul>` : '';
+        $$('[data-share]', el).forEach((btn) => btn.onclick = async () => {
+          const i = list.find((x) => x.code === btn.dataset.share);
+          if (navigator.share) { try { await navigator.share({ title: 'Family recipes invite', text: inviteText(i) }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+          try { await navigator.clipboard.writeText(inviteText(i)); toast(`Invite for ${i.name} copied — paste it into a text`); } catch { prompt('Copy this invite:', inviteText(i)); }
+        });
+        $$('[data-delinv]', el).forEach((btn) => btn.onclick = () => confirm('Cancel this invite link?') && guard(() => st.deleteInvite(btn.dataset.delinv)));
+      }));
+      mk.onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(mk);
+        const people = String(fd.get('names') || '').split('\n').map((s) => s.trim()).filter(Boolean).map((name) => ({ name, role: fd.get('role') }));
+        if (!people.length) return toast('Type at least one name.');
+        mk.reset();
+        const ok = await guard(() => st.createInvites(people), `Made ${people.length} invite link${people.length === 1 ? '' : 's'} — tap "Send link" next to each name`);
+        if (!ok) mk.names.value = people.map((p) => p.name).join('\n');
+      };
+    }
     const inv = $('#invite');
     if (inv) {
       inv.onsubmit = async (e) => {
         e.preventDefault();
         const fd = new FormData(inv);
-        const ok = await guard(() => st.setMember(fd.get('email'), { name: fd.get('name'), role: fd.get('role') }).then(() => true), 'Added! Now send them the invite message.');
-        if (ok) inv.reset();
+        const v = { email: fd.get('email'), name: fd.get('name'), role: fd.get('role') };
+        inv.reset();
+        const ok = await guard(() => st.setMember(v.email, { name: v.name, role: v.role }).then(() => true), 'Added! Now send them the invite message.');
+        if (!ok) { inv.email.value = v.email; inv.name.value = v.name; inv.role.value = v.role; }
       };
       $('#copy-invite').onclick = async () => {
         const text = `You're invited to our family recipe book "${st.family.name}"! Open ${appUrl} and sign in with your Google account (the email I added). On your phone, use "Add to Home Screen" to keep it like an app.`;
@@ -804,11 +872,44 @@ function renderGate(phase) {
   document.body.classList.add('gate');
   const st = S.store;
   if (phase === 'signin') {
-    view.innerHTML = `<div class="gate-card"><div class="logo-big" aria-hidden="true">🍂</div><h1>Family Recipes</h1><p>Sign in with the Google account your family added.</p><button class="btn primary big" id="gsi">Sign in with Google</button></div>`;
-    $('#gsi').onclick = () => guard(() => st.signIn());
+    let mode = 'in';
+    const draw = () => {
+      view.innerHTML = `<div class="gate-card"><div class="logo-big" aria-hidden="true"><img src="icon.svg" alt="" width="72" height="72"></div><h1>Family Recipes</h1>
+        <p>${pendingInvite.get() ? "<b>You're invited!</b> Sign in or create an account to join the family recipe book." : "Sign in to see and share the family's recipes."}</p>
+        <button class="btn primary big wide" id="gsi">Sign in with Google</button>
+        <p class="or"><span>or use your email</span></p>
+        <form id="ef" class="ef">
+          ${mode === 'up' ? '<label>Your name<input name="name" autocomplete="name" required placeholder="Nanny"></label>' : ''}
+          <label>Email<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label>
+          <label>Password<input name="pw" type="password" autocomplete="${mode === 'up' ? 'new-password' : 'current-password'}" required minlength="6" placeholder="${mode === 'up' ? 'At least 6 characters' : ''}"></label>
+          <button class="btn primary wide">${mode === 'up' ? 'Create my account' : 'Sign in'}</button>
+        </form>
+        <p class="small">${mode === 'up' ? 'Already have an account? <button class="link" id="sw">Sign in</button>' : 'New here? <button class="link" id="sw">Create an account</button> · <button class="link" id="forgot">Forgot password?</button>'}</p>
+        <p class="muted small">Use the same email the family owner added for you.</p></div>`;
+      $('#gsi').onclick = () => guard(() => st.signIn());
+      $('#sw').onclick = () => { mode = mode === 'up' ? 'in' : 'up'; draw(); };
+      const fg = $('#forgot');
+      if (fg) fg.onclick = () => { const e = $('#ef [name=email]').value.trim(); if (!e) return toast('Type your email first, then tap "Forgot password?"'); guard(() => st.resetPassword(e), 'Password reset email sent'); };
+      $('#ef').onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        await guard(() => (mode === 'up' ? st.signUpEmail(fd.get('email'), fd.get('pw'), (fd.get('name') || '').trim()) : st.signInEmail(fd.get('email'), fd.get('pw'))));
+      };
+    };
+    draw();
+  } else if (phase === 'verify') {
+    view.innerHTML = `<div class="gate-card"><div class="logo-big" aria-hidden="true">✉️</div><h1>Check your email</h1>
+      <p>We sent a link to <b>${esc(st.me.email)}</b>. Tap it to confirm it's you, then come back here.</p>
+      <p class="muted small">Can't find it? Look in Spam or Promotions.</p>
+      <p class="btn-row center"><button class="btn primary big" id="vok">I've confirmed my email</button></p>
+      <p class="btn-row center"><button class="btn" id="vre">Send it again</button> <button class="btn" id="out">Use another account</button></p></div>`;
+    $('#vok').onclick = async () => { const p = await guard(() => st.checkVerified()); if (!p) return; if (p.phase === 'verify') toast('Not confirmed yet — tap the link in the email first.', 4000); else handlePhase(p); };
+    $('#vre').onclick = () => guard(() => st.resendVerification(), 'Sent again');
+    $('#out').onclick = () => st.signOut();
   } else if (phase === 'notmember') {
     view.innerHTML = `<div class="gate-card"><div class="logo-big" aria-hidden="true">🔒</div><h1>Almost there</h1><p>You're signed in as <b>${esc(st.me.email)}</b>, but you haven't been added to ${st.family ? '<b>' + esc(st.family.name) + '</b>' : 'the family'} yet.</p><p>Ask the family owner to add this email in the <b>Family</b> tab, then tap below.</p><p class="btn-row"><button class="btn primary" id="retry">I've been added — try again</button> <button class="btn" id="out">Use another account</button></p></div>`;
     $('#retry').onclick = () => location.reload();
+    if (!st.family) $('.gate-card p').insertAdjacentHTML('afterend', '<p class="small muted">If someone sent you an invite link, open that link again.</p>');
     $('#out').onclick = () => st.signOut();
   } else if (phase === 'setup') {
     const local = st.mode === 'local';
@@ -828,6 +929,8 @@ function renderGate(phase) {
 
 // --------------------------------------------------------------- boot -----
 async function start() {
+  if (S.started) return;
+  S.started = true;
   document.body.classList.remove('gate');
   S.me = S.store.me;
   $('#fam-name').textContent = S.store.family.name;
@@ -851,12 +954,28 @@ async function start() {
   window.addEventListener('hashchange', route);
 }
 
+const INVITE_KEY = 'family-recipes-invite';
+const pendingInvite = {
+  get() { try { return localStorage.getItem(INVITE_KEY) || ''; } catch { return S.invite || ''; } },
+  set(v) { S.invite = v; try { if (v) localStorage.setItem(INVITE_KEY, v); else localStorage.removeItem(INVITE_KEY); } catch { /* private mode */ } },
+};
+async function handlePhase(p) {
+  if (p.phase === 'notmember' && pendingInvite.get()) {
+    const code = pendingInvite.get();
+    view.innerHTML = '<p class="center muted loading">Joining the family…</p>';
+    try { p = await S.store.claimInvite(code); pendingInvite.set(''); toast(`Welcome to ${S.store.family ? S.store.family.name : 'the family'}!`, 4000); }
+    catch (e) { console.error(e); pendingInvite.set(''); toast(friendlyError(e), 7000); }
+  }
+  if (p.phase === 'ready') { pendingInvite.set(''); start(); } else renderGate(p.phase);
+}
 async function boot() {
+  const m = location.hash.match(/^#\/join\/([a-z0-9]{10,40})$/i);
+  if (m) { pendingInvite.set(m[1]); history.replaceState(null, '', location.pathname + location.search + '#/'); }
   S.store = firebaseConfig ? new FirebaseStore(firebaseConfig) : new LocalStore();
   let phase;
-  try { phase = await S.store.init((p) => (p.phase === 'ready' ? start() : renderGate(p.phase))); }
+  try { phase = await S.store.init((p) => handlePhase(p)); }
   catch (e) { console.error(e); view.innerHTML = `<div class="gate-card"><h1>Can't connect</h1><p>${esc(friendlyError(e))}</p><button class="btn" onclick="location.reload()">Try again</button></div>`; return; }
-  if (phase.phase === 'ready') start(); else renderGate(phase.phase);
+  handlePhase(phase);
 }
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

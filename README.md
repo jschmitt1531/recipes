@@ -30,14 +30,14 @@ One-time setup: in this repository, open **Settings → Pages** and set **Source
 Sharing uses Google's **Firebase** free "Spark" plan: Google sign-in plus a Firestore database. Photos are compressed and stored in the database itself, so no paid Storage bucket is needed. The free quota (1 GB stored, 50,000 reads a day) covers hundreds of recipes with photos for a family.
 
 1. Go to https://console.firebase.google.com and sign in with your Google account → **Create a project** (e.g. `our-family-recipes`). Google Analytics can be turned off.
-2. **Build → Authentication → Get started → Sign-in method → Google → Enable → Save.**
+2. **Build → Authentication → Get started → Sign-in method**: turn on **Google** (Enable → Save), then **Add new provider → Email/Password** (Enable → Save). Email sign-in is what makes the app work reliably from an iPhone home screen.
 3. Still in Authentication: **Settings → Authorized domains → Add domain** → `jschmitt1531.github.io` (and `localhost` is already there for testing).
 4. **Build → Firestore Database → Create database** → choose a location near you → start in **production mode**.
 5. In Firestore open the **Rules** tab, replace everything with the contents of [`firestore.rules`](firestore.rules), and click **Publish**.
 6. **Project settings (⚙️) → General → Your apps → Web (`</>`)** → register an app (any nickname, no Hosting needed). Copy the `firebaseConfig = { … }` object it shows.
 7. Paste it into [`js/config.js`](js/config.js), replacing `null`, then commit and push. The config is not a secret; your data is protected by sign-in plus the rules.
-8. Open the app and **Sign in with Google**. The first person to sign in sets up the family and becomes the **Owner**.
-9. In the **Family** tab, add each relative's Google email and choose their access level, then tap **Copy invite message** and text it to them.
+8. Open the app and sign in (Google, or create an account with any email; email accounts confirm their address once with a link). The first person to sign in sets up the family and becomes the **Owner**.
+9. In the **Family** tab, type everyone's names (one per line), pick what they can do, and tap **Make invite links**. Tap **Send link** next to each name to text it to them. They tap the link, sign in with any email, and they're in. Each link works **once**, so nobody can join without one. (You can also add people by email address instead.)
 
 > Already added recipes in *This device* mode? Before step 7, open **Family → Download backup**. After connecting Firebase, use **Family → Restore from backup**.
 
@@ -50,7 +50,7 @@ Sharing uses Google's **Firebase** free "Spark" plan: Google sign-in plus a Fire
 | **Contributor** | ✓ | ✓ | ✓ | | |
 | **Viewer** | ✓ | | | | |
 
-These are enforced by `firestore.rules` on Google's servers, not just hidden in the app. People who aren't on the family list can't read anything. Owners can change anyone's level at any time, and you can have more than one Owner.
+These are enforced by `firestore.rules` on Google's servers, not just hidden in the app. People who aren't on the family list can't read anything. That includes someone who signs in without an invite, and someone who tries an invite link that was already used. Owners can change anyone's level at any time, and you can have more than one Owner.
 
 ## Installing on a phone
 
@@ -78,4 +78,5 @@ These are enforced by `firestore.rules` on Google's servers, not just hidden in 
 | `js/importers.js` | Photo OCR (Tesseract.js), Word (mammoth.js), image compression |
 | `firestore.rules` | Security rules for the shared database |
 | `sw.js`, `manifest.webmanifest`, `icon*.{svg,png}` | Offline support and home-screen install |
+| Testing | Set `emulator: true` in the config to point the app at the local Firebase emulators |
 | `tests/run.mjs` | Tests for parsing, units, weights and the grocery list: `node tests/run.mjs` |

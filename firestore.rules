@@ -13,6 +13,7 @@ service cloud.firestore {
     function rank(r) { return r == 'owner' ? 4 : (r == 'editor' ? 3 : (r == 'contributor' ? 2 : (r == 'viewer' ? 1 : 0))); }
     function atLeast(r) { return isMember() && rank(get(memberPath()).data.role) >= rank(r); }
     function familyExists() { return exists(/databases/$(database)/documents/meta/family); }
+    function recipeIsMine(rid) { return get(/databases/$(database)/documents/recipes/$(rid)).data.createdBy.uid == request.auth.uid; }
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
     function isMine(field) { return resource.data[field].uid == request.auth.uid; }
     function claimsMe(field) { return request.resource.data[field].uid == request.auth.uid; }
@@ -34,12 +35,36 @@ service cloud.firestore {
       allow create: if (signedIn() && email == myEmail() && !familyExists()
                         && existsAfter(/databases/$(database)/documents/meta/family)
                         && request.resource.data.role == 'owner')
-                    || atLeast('owner');
+                    || atLeast('owner')
+                    || joinsWithInvite(email);
       // Owners manage everyone; each person may update their own display name / uid link.
       allow update: if atLeast('owner')
                     || (isMember() && email == myEmail() && onlyChanges(['name', 'uid']));
       // Owners can't remove themselves (keeps at least one owner around).
       allow delete: if atLeast('owner') && email != myEmail();
+    }
+
+    // Invite links: the owner makes one per person; it works once.
+    // Joining = creating your own member record with the invite's role while
+    // marking the invite used, in one batch.
+    function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
+    function joinsWithInvite(email) {
+      let code = request.resource.data.invite;
+      return signedIn() && email == myEmail() && code is string
+        && exists(invitePath(code))
+        && get(invitePath(code)).data.usedBy == null
+        && request.resource.data.role == get(invitePath(code)).data.role
+        && request.resource.data.role != 'owner'
+        && getAfter(invitePath(code)).data.usedBy == myEmail();
+    }
+    match /invites/{code} {
+      allow get: if signedIn();          // you must already know the code
+      allow list, create, delete: if atLeast('owner');
+      allow update: if atLeast('owner')
+        || (signedIn() && resource.data.usedBy == null
+            && onlyChanges(['usedBy', 'usedAt'])
+            && request.resource.data.usedBy == myEmail()
+            && getAfter(/databases/$(database)/documents/members/$(myEmail())).data.invite == code);
     }
 
     match /recipes/{recipeId} {
@@ -55,7 +80,8 @@ service cloud.firestore {
         allow create: if atLeast('viewer') && (claimsMe('by') || atLeast('owner'))
                       && request.resource.data.text is string && request.resource.data.text.size() < 5000;
         allow update: if isMember() && isMine('by') && onlyChanges(['text']);
-        allow delete: if atLeast('editor') || (isMember() && isMine('by'));
+        allow delete: if atLeast('editor') || (isMember() && isMine('by'))
+                      || (atLeast('contributor') && recipeIsMine(recipeId));
       }
     }
 
@@ -66,7 +92,8 @@ service cloud.firestore {
       allow create: if atLeast('viewer') && (claimsMe('by') || atLeast('owner'))
                     && request.resource.data.data is string && request.resource.data.data.size() < 900000;
       allow update: if atLeast('editor') || (isMember() && isMine('by') && onlyChanges(['caption']));
-      allow delete: if atLeast('editor') || (isMember() && isMine('by'));
+      allow delete: if atLeast('editor') || (isMember() && isMine('by'))
+                    || (atLeast('contributor') && recipeIsMine(resource.data.recipeId));
     }
 
     // Each person's own grocery list.
