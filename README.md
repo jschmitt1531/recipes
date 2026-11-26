@@ -3,12 +3,13 @@
 A shared family recipe book that works like an app on phones, tablets and computers, without an App Store, and free.
 
 - **Add recipes from anywhere:** take a photo of a recipe card or cookbook page (the text is read automatically), open a Word document (`.docx`), paste text, or type it in. The original photo is kept with the recipe.
+- **Whole cookbooks at once:** open a Word file with many recipes, one heading per recipe. Every recipe is found, sorted into a course, and shown in a list to check before importing all of them. Titles like “Stuffing-mom/dad” or “Potato pie-nanny’s” fill in **whose recipe** it is.
 - **Ingredients with weights:** every ingredient shows its amount and its **mass in grams**. Weights come from standard kitchen charts (for example, 1 cup flour ≈ 125 g). Tap any weight to enter the exact one. Switch between *Cups & spoons* and *Grams*.
 - **Servings scaler:** use − / + and every amount and weight updates.
 - **Step by step:** tap a step to cross it off, or use **Cook mode** to see one large step at a time. The screen stays on while you cook.
 - **Notes, photos and comments:** anyone can add a photo of how theirs turned out and leave comments.
 - **Favorites:** ♥ a recipe and everyone sees who loves it. Recipes loved by two or more people get a ★ *Family favorite* ribbon.
-- **Who shared it:** every recipe shows who added it and who last edited it, with a change history.
+- **Whose recipe and who shared it:** each recipe can say whose it is (Nanny, Dad…), and you can filter by it. every recipe shows who added it and who last edited it, with a change history.
 - **Sort and filter:** tap a **course** (Appetizers, Breads, Mains, Desserts, Soups, Sides…) or a **main ingredient** (Chicken, Beef & Steak, Pork, Fish & Seafood, Turkey, Lamb, Vegetarian…) to filter, or choose *Group by course* / *Group by main ingredient*. The main ingredient is detected automatically from the title and ingredients (chicken broth alone doesn't count as chicken, and doesn't count as vegetarian either). You can change it in the editor.
 - **Grocery list:** tick the ingredients you need and tap *Add to grocery list*. Amounts from different recipes are combined (including grams) and sorted by store aisle. Share the list by text.
 - **Family access levels:** Owner, Editor, Contributor and Viewer (see below).

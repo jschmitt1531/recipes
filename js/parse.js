@@ -9,6 +9,7 @@ const BULLET_RE = /^\s*(?:[-•*·▪●○◦–—]|\d+[.)]\s+(?=\D)|\[\s?\]|�
 export function cleanLine(s) {
   return String(s || '')
     .replace(/ /g, ' ')
+    .replace(/⁄/g, '/')
     .replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
@@ -19,15 +20,17 @@ export function parseIngredientLine(line) {
   let s = cleanLine(line).replace(/^\s*(?:[-•*·▪●○◦–—]|\[\s?\]|☐)\s*/, '');
   const out = { qty: null, qtyMax: null, unit: '', item: '', note: '', raw: cleanLine(line) };
   if (!s) return out;
+  s = s.replace(/^(\d+(?:\/\d+)?)\s*(?:"|-?\s*inch(?:es)?\b)\s*(piece|knob|chunk|stick)s?\s+(?:of\s+)?(.+)$/i, '1 $2 $3 ($1 inch)');
   // "a pinch of", "an onion"
-  const art = s.match(/^(a|an|one)\s+(?=\S)/i);
+  const art = s.match(/^(a|an|one|two|three|four|five|six|half|a half|half a)\s+(?=\S)/i);
+  const WORDNUM = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, half: 0.5, 'a half': 0.5, 'half a': 0.5 };
   const m = s.match(QTY_RE);
   if (m) {
     out.qty = parseNumber(m[1]);
     if (m[2]) out.qtyMax = parseNumber(m[2]);
     s = s.slice(m[0].length).trim();
   } else if (art) {
-    out.qty = 1; s = s.slice(art[0].length);
+    out.qty = WORDNUM[art[1].toLowerCase()]; s = s.slice(art[0].length);
   }
   // package size right after the number: "1 (14 oz) can tomatoes"
   let pre = '';
@@ -60,6 +63,14 @@ export function parseIngredientLine(line) {
   const taste = rest.match(/\s+(to taste|as needed|for serving|for garnish|optional)$/i);
   if (taste) { notes.push(taste[1]); rest = rest.slice(0, taste.index).trim(); }
   out.item = rest;
+  if (out.qty == null) {
+    const k = notes.findIndex((n) => QTY_RE.test(n) && /^\S+\s*\S*\s*[a-z.]+$/i.test(n));
+    if (k >= 0) {
+      const p = parseIngredientLine(notes[k] + ' x');
+      if (p.qty != null && p.unit) { out.qty = p.qty; out.qtyMax = p.qtyMax; out.unit = p.unit; notes.splice(k, 1); }
+    }
+  }
+  if (out.qty == null && ['pinch', 'dash'].includes(out.unit)) out.qty = 1;
   out.note = notes.filter(Boolean).join('; ');
   return out;
 }
@@ -67,63 +78,122 @@ export function parseIngredientLine(line) {
 export function looksLikeIngredient(line) {
   const s = cleanLine(line).replace(/^\s*(?:[-•*·▪●○◦–—]|\[\s?\]|☐)\s*/, '');
   if (!s || s.length > 90) return false;
+  if (/^\d{3}\s*(°|degrees|deg\b|f\b|for\b)/i.test(s)) return false;
+  if (/[a-z]\.\s+[A-Z]/.test(s) && s.split(' ').length > 6) return false;
   if (QTY_RE.test(s) && !/^\d+[.)]\s/.test(s) && !/^\d+\s*(minutes?|mins?|hours?|hrs?|degrees|°)/i.test(s)) return true;
-  if (/^(a|an)\s+(pinch|dash|handful|few)\b/i.test(s)) return true;
+  if (/^(a|an)\s+(pinch|dash|handful|few)\b/i.test(s) || /^(pinch|dash|handful)\s+of\b/i.test(s)) return true;
+  if (/^(one|two|three|four|half)\s+(cups?|tbsp|tsp|tablespoons?|teaspoons?|lbs?|pounds?|cans?|large|medium|small)\b/i.test(s)) return true;
   if (/\b(to taste|as needed)\b/i.test(s) && s.split(' ').length <= 8) return true;
   return false;
 }
 
-const H_ING = /^(ingredients?|what you('|’)?ll need|you('|’)?ll need|you will need|shopping list)\b\s*:?\s*$/i;
-const H_STEPS = /^(directions?|instructions?|method|preparation|prep(aration)? steps|steps|how to make( it)?|procedure|to make)\b\s*:?\s*$/i;
-const H_NOTES = /^(notes?|tips?|cook'?s notes?|variations?|serving suggestions?|storage)\b\s*:?\s*$/i;
+const H_ING = /^(ingredients?|what you('|’)?ll need|you('|’)?ll need|you will need|shopping list)(\s*nutrition)?\s*:?\s*$/i;
+const H_STEPS = /^(directions?|instructions?|method|preparation|prep(aration)? steps|steps|how to make( it)?|procedure)\s*:?\s*$/i;
+const H_NOTES = /^(notes?|tips?|cook'?s notes?|variations?|serving suggestions?|storage)\s*:?\s*$/i;
 const META = [
-  ['servings', /^(?:serves|servings?|yield|yields|makes)\s*:?\s*(?:about\s*)?(\d+)(?:\s*(?:-|to)\s*\d+)?\b.*$/i],
-  ['prepTime', /^prep(?:aration)?(?:\s*time)?\s*:\s*(.+)$/i],
-  ['cookTime', /^(?:cook(?:ing)?|bake|baking)(?:\s*time)?\s*:\s*(.+)$/i],
-  ['totalTime', /^total(?:\s*time)?\s*:\s*(.+)$/i],
-  ['source', /^(?:from|source|recipe from|by)\s*:\s*(.+)$/i],
+  ['servings', /^(?:serves|servings?|makes)\s*:?\s*(?:about\s*)?(\d+)(?:\s*(?:-|to)\s*\d+)?\b.*$/i],
+  ['yield', /^yields?\s*:?\s*(\d+)\s*(?:servings?|people|portions?)?\s*$/i],
+  ['makes', /^yields?\s*:?\s*(\d.+)$/i],
+  ['prepTime', /^prep(?:aration)?\s*time\s*:?\s*(\d.*)$|^prep\s*:\s*(.+)$/i],
+  ['cookTime', /^(?:cook(?:ing)?|bake|baking)\s*time\s*:?\s*(\d.*)$|^(?:cook|bake)\s*:\s*(.+)$/i],
+  ['totalTime', /^(?:total(?:\s*time)?|ready in)\s*:?\s*(\d.*)$/i],
+  ['course', /^course\s*:?\s*([a-z][a-z ,&]*)$/i],
+  ['source', /^(?:source|recipe from|author|adapted from|reference|read more|from|by)\s*:\s*(.+)$|^(?:author|adapted from)\s+(.+)$/i],
+  ['skip', /^(?:cuisine|keyword|units|calories|nutrition|print|pin|jump to recipe)\b.*$/i],
 ];
+const URL_RE = /(https?:\/\/\S+|www\.\S+)/i;
 
-// Split OCR/Word text into a recipe draft.
-export function parseRecipeText(text) {
+// Verbs that usually start an instruction ("Add the…", "Bake 20 min").
+const STEP_VERB = /^(add|mix|stir|put|place|cook|bake|heat|pour|cut|chop|slice|dice|mince|dip|whisk|beat|combine|bring|boil|simmer|fry|saute|sauté|brown|roast|grill|broil|preheat|serve|let|remove|cover|refrigerate|chill|freeze|wrap|spread|sprinkle|season|blend|puree|purée|fold|melt|cream|line|fill|top|drain|transfer|repeat|then|now|in a|in the|once|when|while|after|before|take|wash|rinse|soak|pull|rub|toss|marinate|divide|set|use|make|keep|store|layer|arrange|form|roll|shape|knead|whip|mash|peel|trim|cube|grease|spray|scoop|press|bring|reduce|return|flip|turn|garnish|enjoy|eat)\b/i;
+const OVEN = /^\d{3}\s*(°|degrees|deg\b|f\b|for\b)/i;
+
+export function looksLikeStep(line) {
+  const s = cleanLine(line);
+  if (!s) return false;
+  const words = s.split(' ').length;
+  if (/^(?:step\s*)?\d+\s*[.)]\s+\D/i.test(s)) return true; // "1. Slice the…"
+  if (OVEN.test(s)) return true;
+  if (looksLikeIngredient(s)) return false;
+  if (s.length > 75) return true;
+  if (STEP_VERB.test(s) && words >= 2) return true;
+  if (/[.!]$/.test(s) && words >= 4) return true;
+  return false;
+}
+
+// "Stuffing-mom/dad" -> { title: 'Stuffing', from: 'Mom/Dad' }; "Grandma's Pie" keeps its title, from 'Grandma'.
+const REL = "(?:mom|mommy|mother|dad|daddy|father|nanny|nana|nan|nonna|grandma|grandmother|grandpa|grandfather|granny|gram|gramps|papa|pop|pops|mimi|meemaw|memaw|aunt(?:ie)?\\s+[a-z]+|uncle\\s+[a-z]+)";
+const FROM_SUFFIX = new RegExp(`^(.*?\\S)\\s*[-–—(]\\s*(${REL}(?:\\s*(?:/|&|and|,)\\s*${REL})*)(?:['’]s)?\\s*\\)?\\s*$`, 'i');
+const FROM_PREFIX = new RegExp(`^(${REL})['’]s\\s+\\S`, 'i');
+const capWords = (s) => s.replace(/\b([a-z])/g, (c) => c.toUpperCase());
+export function splitTitle(raw) {
+  let title = cleanLine(raw).replace(/^recipe\s*(?:for|:)\s*/i, '');
+  let from = '';
+  const m = title.match(FROM_SUFFIX);
+  if (m) { title = m[1].trim(); from = capWords(m[2].replace(/\s*(\/|&|and|,)\s*/gi, (x, sep) => (sep === '/' ? '/' : ' & '))); }
+  else { const p = title.match(FROM_PREFIX); if (p) from = capWords(p[1]); }
+  if (/^[A-Z0-9 '&-]+$/.test(title) && title.length > 3) title = titleCase(title);
+  if (title) title = title[0].toUpperCase() + title.slice(1);
+  return { title, from };
+}
+
+// Split OCR/Word text into a recipe draft. opts.title: title already known (e.g. a Word heading).
+export function parseRecipeText(text, opts = {}) {
   const rawLines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
-  const r = { title: '', description: '', servings: null, prepTime: '', cookTime: '', source: '', ingredients: [], steps: [], notes: '' };
+  const r = { title: '', from: '', description: '', servings: null, prepTime: '', cookTime: '', source: '', courseHint: '', ingredients: [], steps: [], notes: '' };
   const lines = rawLines.map(cleanLine);
-  let section = 'head';
+  const hasTitle = !!opts.title;
+  let section = hasTitle ? 'start' : 'head';
   let ingSection = '';
+  let stepPrefix = '';
   const head = [], stepLines = [], noteLines = [];
   const hasHeaders = lines.some((l) => H_ING.test(l) || H_STEPS.test(l));
+  const pushStep = (l) => { stepLines.push(stepPrefix ? stepPrefix + ' ' + l : l); stepPrefix = ''; };
 
   for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
+    let l = lines[i];
     if (!l) { if (section === 'steps') stepLines.push(''); if (section === 'notes') noteLines.push(''); continue; }
     if (H_ING.test(l)) { section = 'ing'; continue; }
     if (H_STEPS.test(l)) { section = 'steps'; continue; }
     if (H_NOTES.test(l)) { section = 'notes'; continue; }
+    // links: "Read more: http://…", "Banana Bread https://…" -> source
+    const url = l.match(URL_RE);
+    if (url && (l.length - url[0].length < 60 || /^(read more|reference|source)/i.test(l))) { if (!r.source) r.source = url[0].replace(/[).,]+$/, ''); continue; }
     const meta = META.find(([, re]) => re.test(l));
     if (meta && section !== 'steps' && section !== 'notes') {
-      const v = l.match(meta[1])[1].trim();
-      if (meta[0] === 'servings') r.servings = parseInt(v, 10);
+      const mm = l.match(meta[1]);
+      const v = (mm[1] || mm[2] || '').trim();
+      if (meta[0] === 'servings') r.servings = r.servings || parseInt(v, 10);
+      else if (meta[0] === 'yield') r.servings = r.servings || parseInt(v, 10);
       else if (meta[0] === 'totalTime') { if (!r.cookTime) r.cookTime = v; }
-      else r[meta[0]] = v;
+      else if (meta[0] === 'course') r.courseHint = v;
+      else if (meta[0] === 'makes') r.description = (r.description ? r.description + ' ' : '') + 'Makes ' + v + '.';
+      else if (meta[0] !== 'skip') r[meta[0]] = v;
       continue;
     }
     // inline "Notes: blah"
     const inlineNote = l.match(/^(?:notes?|tip)\s*:\s*(.+)$/i);
     if (inlineNote) { section = 'notes'; noteLines.push(inlineNote[1]); continue; }
 
+    if (section === 'start') {
+      // Title is known: a long sentence first is the description, otherwise the body starts.
+      if (!looksLikeIngredient(l) && l.length > 60 && /[.!]$/.test(l) && !r.ingredients.length) { head.push(l); continue; }
+      section = hasHeaders ? (looksLikeIngredient(l) ? 'ing' : 'head') : (looksLikeStep(l) ? 'steps' : 'ing');
+    } else if (section === 'head' && (hasTitle || head.length) && looksLikeIngredient(l)) section = 'ing';
+
     if (!hasHeaders) {
-      // No headings: decide line by line.
-      if (looksLikeIngredient(l) && section !== 'steps') { section = 'ing'; }
-      else if (section === 'ing' && !/:$/.test(l)) { section = 'steps'; }
+      // No headings: ingredients until the first instruction, then instructions.
+      if (section === 'head' && head.length && looksLikeIngredient(l)) section = 'ing';
+      else if (section === 'ing' && looksLikeStep(l)) section = 'steps';
+      else if (section === 'ing' && /^to make\b.*:$/i.test(l)) { section = 'steps'; stepPrefix = l; continue; }
     }
 
     if (section === 'head') head.push(l);
     else if (section === 'ing') {
-      if (/:$/.test(l) && !looksLikeIngredient(l)) { ingSection = l.replace(/:$/, '').replace(/^for (the )?/i, '').trim(); continue; }
+      if (/:$/.test(l) && !looksLikeIngredient(l) && l.split(' ').length <= 6) { ingSection = l.replace(/:$/, '').replace(/^for (the )?/i, '').trim(); continue; }
       const prev = r.ingredients[r.ingredients.length - 1];
-      // OCR wrap: a line starting lowercase with no amount continues the previous ingredient
-      if (prev && /^[a-z(]/.test(l) && !looksLikeIngredient(l) && l.split(' ').length <= 5) {
+      // wrapped line: starts lowercase / "(" and has no amount -> continues the previous ingredient
+      const wrap = opts.paragraphs ? /^(\(|or\s|and\s)/i.test(l) : /^[a-z(]/.test(l);
+      if (prev && wrap && !looksLikeIngredient(l) && l.split(' ').length <= 5) {
         const merged = parseIngredientLine(prev.raw + ' ' + l);
         Object.assign(prev, merged, { section: prev.section });
         continue;
@@ -131,18 +201,37 @@ export function parseRecipeText(text) {
       const ing = parseIngredientLine(l);
       ing.section = ingSection;
       r.ingredients.push(ing);
-    } else if (section === 'steps') stepLines.push(l);
-    else noteLines.push(l);
+    } else if (section === 'steps') {
+      if (/:$/.test(l) && l.split(' ').length <= 6) { stepPrefix = l; continue; }
+      pushStep(l);
+    } else noteLines.push(l);
   }
 
-  // Title + description from the head.
   const headClean = head.filter((l) => !/^(recipe|page \d+)$/i.test(l));
-  r.title = (headClean.shift() || '').replace(/^recipe\s*:\s*/i, '');
-  if (/^[A-Z0-9 '&-]+$/.test(r.title) && r.title.length > 3) r.title = titleCase(r.title);
-  r.description = headClean.join(' ');
-  r.steps = splitSteps(stepLines);
+  const t = splitTitle(hasTitle ? opts.title : headClean.shift() || '');
+  r.title = t.title;
+  r.from = t.from;
+  r.description = [headClean.join(' '), r.description].filter(Boolean).join(' ');
+  r.steps = splitSteps(stepLines, opts.paragraphs);
   r.notes = noteLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   return r;
+}
+
+// A Word file with several recipes: blocks [{ level: 1-6 for headings or 0, text }].
+// Recipes start at the most-used top heading level; returns [{ title, text }].
+export function splitCookbook(blocks) {
+  const counts = {};
+  for (const b of blocks) if (b.level && cleanLine(b.text)) counts[b.level] = (counts[b.level] || 0) + 1;
+  const level = Object.keys(counts).map(Number).sort((a, b) => a - b).find((lv) => counts[lv] >= 2);
+  if (!level) return [];
+  const out = [];
+  let cur = null;
+  for (const b of blocks) {
+    const t = cleanLine(b.text);
+    if (b.level === level && t) { cur = { title: t, lines: [] }; out.push(cur); continue; }
+    if (cur) cur.lines.push(t);
+  }
+  return out.map((c) => ({ title: c.title, text: c.lines.join('\n').replace(/^\n+|\n+$/g, '') }));
 }
 
 function titleCase(s) {
@@ -150,7 +239,7 @@ function titleCase(s) {
 }
 
 // Steps: numbered ("1.", "Step 2:") or paragraphs. Wrapped lines are joined.
-export function splitSteps(lines) {
+export function splitSteps(lines, paragraphs = false) {
   const steps = [];
   const numbered = lines.filter((l) => /^\s*(?:step\s*)?\d+\s*[.):-]\s*/i.test(l)).length;
   let cur = '';
@@ -164,7 +253,8 @@ export function splitSteps(lines) {
     else if (numbered >= 2) cur += (cur ? ' ' : '') + l;
     else {
       // paragraph mode: join lines that look like a wrap (previous doesn't end a sentence or next starts lowercase)
-      if (cur && (/^[a-z]/.test(l) || !/[.!?)]$/.test(cur))) cur += ' ' + l;
+      const joins = paragraphs ? /^[a-z]/.test(l) && !/[.!?)]$/.test(cur) : /^[a-z]/.test(l) || !/[.!?)]$/.test(cur);
+      if (cur && joins) cur += ' ' + l;
       else { push(); cur = l; }
     }
   }

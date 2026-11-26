@@ -37,8 +37,8 @@ export const UNITS = {
 // Words people write -> unit key. Case-sensitive entries first (T vs t).
 const CASE_SENSITIVE = { T: 'tbsp', Tbs: 'tbsp', Tb: 'tbsp', t: 'tsp' };
 const ALIASES = {
-  teaspoon: 'tsp', teaspoons: 'tsp', tsp: 'tsp', tsps: 'tsp', ts: 'tsp',
-  tablespoon: 'tbsp', tablespoons: 'tbsp', tbsp: 'tbsp', tbsps: 'tbsp', tbs: 'tbsp', tbl: 'tbsp', tbls: 'tbsp', tblsp: 'tbsp',
+  teaspoon: 'tsp', teaspoons: 'tsp', tsp: 'tsp', tsps: 'tsp', ts: 'tsp', tp: 'tsp', tps: 'tsp', tea: 'tsp',
+  tablespoon: 'tbsp', tablespoons: 'tbsp', tbsp: 'tbsp', tbsps: 'tbsp', tbs: 'tbsp', tbl: 'tbsp', tbls: 'tbsp', tblsp: 'tbsp', tbsn: 'tbsp',
   cup: 'cup', cups: 'cup', c: 'cup',
   'fl oz': 'floz', 'fl. oz': 'floz', 'fl.oz': 'floz', floz: 'floz', 'fluid ounce': 'floz', 'fluid ounces': 'floz',
   pint: 'pint', pints: 'pint', pt: 'pint', pts: 'pint',
@@ -158,7 +158,7 @@ const COUNT_UNIT_ITEM = [
   ['envelope', 'yeast', 7], ['package', 'yeast', 7], ['package', 'cream cheese', 227], ['package', 'gelatin', 7], ['package', 'pudding', 96],
   ['head', 'garlic', 50], ['head', 'lettuce', 500], ['head', 'cauliflower', 600], ['head', 'broccoli', 400], ['head', 'cabbage', 900],
   ['bunch', 'parsley', 60], ['bunch', 'cilantro', 60], ['bunch', 'green onions', 100], ['bunch', 'kale', 200], ['sprig', 'thyme', 0.5], ['sprig', 'rosemary', 1],
-  ['slice', 'bacon', 28], ['slice', 'bread', 30], ['slice', 'cheese', 21],
+  ['slice', 'bacon', 28], ['piece', 'ginger', 10], ['piece', 'cinnamon', 3], ['stick', 'cinnamon', 3], ['slice', 'bread', 30], ['slice', 'cheese', 21],
 ];
 
 export function normalizeItem(item) {

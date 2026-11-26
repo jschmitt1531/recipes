@@ -1,10 +1,10 @@
 import { firebaseConfig } from './config.js';
 import { LocalStore, FirebaseStore, ROLES, ROLE_INFO, can } from './store.js';
 import { UNITS, massOf, formatGrams, formatQty, parseNumber, unitLabel } from './units.js';
-import { parseIngredientLine, parseRecipeText } from './parse.js';
+import { parseIngredientLine, parseRecipeText, splitCookbook } from './parse.js';
 import { addToList, combineQty, AISLE_ORDER, listToText } from './grocery.js';
-import { COURSES, PROTEINS, courseLabel, courseIcon, proteinLabel, proteinIcon, proteinOf, detectProtein } from './categories.js';
-import { compressImage, ocrImage, readWordFile, readTextFile } from './importers.js';
+import { COURSES, PROTEINS, courseLabel, courseIcon, proteinLabel, proteinIcon, proteinOf, detectProtein, detectCourse } from './categories.js';
+import { compressImage, ocrImage, readWordDocument, readTextFile } from './importers.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -63,6 +63,7 @@ const qtyText = (q, qMax, unit, scale = 1) => {
   if (qMax != null && qMax !== '') s += '–' + formatQty(qMax * scale, unit);
   return s;
 };
+const fromNames = (r) => String(r.from || '').split(/\s*(?:\/|&|,|\band\b)\s*/i).map((s) => s.trim()).filter(Boolean);
 const favNames = (r) => Object.values(r.favorites || {});
 const isFav = (r) => !!(r.favorites && S.me && r.favorites[S.me.uid]);
 
@@ -88,7 +89,7 @@ const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
 // ----------------------------------------------------------------- list ---
 function renderList() {
   const f = S.filter;
-  const people = [...new Set(S.recipes.map((r) => r.createdBy && r.createdBy.name).filter(Boolean))].sort();
+  const people = [...new Set(S.recipes.flatMap((r) => [...fromNames(r), r.createdBy && r.createdBy.name]).filter(Boolean))].sort();
   view.innerHTML = `
     <section class="list-head">
       <div class="search"><span aria-hidden="true">🔍</span><input id="q" type="search" placeholder="Search recipes, ingredients, notes…" value="${esc(f.q)}" aria-label="Search recipes"></div>
@@ -98,7 +99,7 @@ function renderList() {
       <div class="chip-row"><span class="chip-label">Course</span><div class="chips" role="group" aria-label="Course" id="cat-chips"></div></div>
       <div class="chip-row"><span class="chip-label">Main ingredient</span><div class="chips" role="group" aria-label="Main ingredient" id="pro-chips"></div></div>
       <div class="filters">
-        <select id="by" aria-label="Added by"><option value="">Anyone</option>${people.map((p) => `<option ${f.by === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
+        <select id="by" aria-label="Whose recipe"><option value="">Everyone's recipes</option>${people.map((p) => `<option ${f.by === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
         <select id="sort" aria-label="Sort"><option value="new" ${f.sort === 'new' ? 'selected' : ''}>Newest</option><option value="az" ${f.sort === 'az' ? 'selected' : ''}>A–Z</option><option value="loved" ${f.sort === 'loved' ? 'selected' : ''}>Most loved</option><option value="updated" ${f.sort === 'updated' ? 'selected' : ''}>Recently changed</option><option value="g-course" ${f.sort === 'g-course' ? 'selected' : ''}>Group by course</option><option value="g-protein" ${f.sort === 'g-protein' ? 'selected' : ''}>Group by main ingredient</option></select>
       </div>
     </section>
@@ -111,9 +112,9 @@ function renderList() {
       if (f.show === 'mine' && !(r.createdBy && r.createdBy.uid === S.me.uid)) return false;
       if (f.cat && r.category !== f.cat) return false;
       if (f.protein && proteinOf(r) !== f.protein) return false;
-      if (f.by && !(r.createdBy && r.createdBy.name === f.by)) return false;
+      if (f.by && !fromNames(r).includes(f.by) && !(r.createdBy && r.createdBy.name === f.by)) return false;
       if (q) {
-        const hay = [r.title, r.description, r.notes, r.category, courseLabel(r.category), proteinLabel(proteinOf(r)), (r.tags || []).join(' '), r.source, r.createdBy && r.createdBy.name, ...(r.ingredients || []).map((i) => i.item)].join(' ').toLowerCase();
+        const hay = [r.title, r.from, r.description, r.notes, r.category, courseLabel(r.category), proteinLabel(proteinOf(r)), (r.tags || []).join(' '), r.source, r.createdBy && r.createdBy.name, ...(r.ingredients || []).map((i) => i.item)].join(' ').toLowerCase();
         return q.split(/\s+/).every((w) => hay.includes(w));
       }
       return true;
@@ -168,7 +169,7 @@ function card(r) {
       ${names.length >= 2 ? '<span class="ribbon">★ Family favorite</span>' : ''}</div>
     <div class="card-body">
       <h3>${esc(r.title || 'Untitled recipe')}</h3>
-      <p class="meta">${r.category ? `<span class="tag">${esc(courseIcon(r.category) + ' ' + courseLabel(r.category))}</span>` : ''} ${proteinOf(r) ? `<span class="tag alt">${esc(proteinIcon(proteinOf(r)) + ' ' + proteinLabel(proteinOf(r)))}</span>` : ''} ${r.createdBy ? `by <b>${esc(r.createdBy.name)}</b>` : ''}</p>
+      <p class="meta">${r.category ? `<span class="tag">${esc(courseIcon(r.category) + ' ' + courseLabel(r.category))}</span>` : ''} ${proteinOf(r) ? `<span class="tag alt">${esc(proteinIcon(proteinOf(r)) + ' ' + proteinLabel(proteinOf(r)))}</span>` : ''} ${r.from ? `from <b>${esc(r.from)}</b>` : r.createdBy ? `by <b>${esc(r.createdBy.name)}</b>` : ''}</p>
       ${names.length ? `<p class="loved"><span class="heart ${mine ? 'on' : ''}" aria-hidden="true">♥</span> ${esc(names.slice(0, 3).join(', '))}${names.length > 3 ? ` +${names.length - 3}` : ''}</p>` : ''}
     </div></a>`;
 }
@@ -207,7 +208,8 @@ function renderRecipe(id) {
         <p class="eyebrow">${esc([r.category && courseLabel(r.category), proteinOf(r) && proteinLabel(proteinOf(r))].filter(Boolean).join(' · '))}${(r.tags || []).length ? ' · ' + (r.tags || []).map(esc).join(', ') : ''}</p>
         <h1>${esc(r.title)}</h1>
         ${r.description ? `<p class="lede">${esc(r.description)}</p>` : ''}
-        <p class="byline">${avatar(r.createdBy && r.createdBy.name)} Shared by <b>${esc(r.createdBy ? r.createdBy.name : 'someone')}</b> · ${esc(when(r.createdAt))}${r.updatedBy && r.updatedAt !== r.createdAt ? ` · edited by ${esc(r.updatedBy.name)} ${esc(when(r.updatedAt))}` : ''}</p>
+        ${r.from ? `<p class="from">${avatar(r.from)} <b>${esc(r.from)}'s recipe</b></p>` : ''}
+        <p class="byline">${r.from ? '' : avatar(r.createdBy && r.createdBy.name)} Shared by <b>${esc(r.createdBy ? r.createdBy.name : 'someone')}</b> · ${esc(when(r.createdAt))}${r.updatedBy && r.updatedAt !== r.createdAt ? ` · edited by ${esc(r.updatedBy.name)} ${esc(when(r.updatedAt))}` : ''}</p>
         ${r.source ? `<p class="muted small">Source: ${esc(r.source)}</p>` : ''}
         <div class="r-actions">
           <button class="btn fav ${isFav(r) ? 'on' : ''}" id="fav" aria-pressed="${isFav(r)}"><span class="heart" aria-hidden="true">♥</span> ${isFav(r) ? 'Favorited' : 'Favorite'}</button>
@@ -420,21 +422,87 @@ function renderAdd() {
     const file = await pickFile('.docx,.doc,.txt,.md,.rtf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain');
     if (!file) return;
     original = null;
-    const text = await guard(() => (/\.(txt|md)$/i.test(file.name) ? readTextFile(file) : readWordFile(file)));
-    if (text != null) { show(); $('#ex-img').hidden = true; $('#ex-text').value = text.trim(); }
+    if (/\.(txt|md)$/i.test(file.name)) {
+      const text = await guard(() => readTextFile(file));
+      if (text != null) { show(); $('#ex-img').hidden = true; $('#ex-text').value = text.trim(); }
+      return;
+    }
+    toast('Reading ' + file.name + '…');
+    const doc = await guard(() => readWordDocument(file));
+    if (!doc) return;
+    const book = splitCookbook(doc.blocks);
+    if (book.length >= 2) return renderCookbook(book, file.name);
+    show(); $('#ex-img').hidden = true; $('#ex-text').value = doc.text.trim();
   };
   $('#a-paste').onclick = () => { original = null; show(); $('#ex-img').hidden = true; $('#ex-text').focus(); };
   $('#ex-go').onclick = () => {
     const parsed = parseRecipeText($('#ex-text').value);
-    S.draft = { ...blankRecipe(), ...parsed, _original: original };
+    S.draft = { ...blankRecipe(), ...parsed, category: detectCourse(parsed), _original: original };
+    delete S.draft.courseHint;
     if (!S.draft.title) S.draft.title = 'New recipe';
     go('#/new');
   };
 }
 
+// A Word file with many recipes: review the list, then import them all at once.
+function renderCookbook(book, fileName) {
+  const have = new Set(S.recipes.map((r) => (r.title || '').trim().toLowerCase()));
+  const items = book.map((c) => {
+    const r = parseRecipeText(c.text, { title: c.title, paragraphs: true });
+    const course = detectCourse(r);
+    delete r.courseHint;
+    const empty = !r.ingredients.length && !r.steps.length;
+    return { r: { ...blankRecipe(), ...r, servings: r.servings || null, category: course }, empty, dupe: have.has(r.title.trim().toLowerCase()), on: !have.has(r.title.trim().toLowerCase()) };
+  });
+  const courseOpts = (v) => `<option value="">—</option>${COURSES.map(([c, l]) => `<option value="${c}" ${v === c ? 'selected' : ''}>${l}</option>`).join('')}`;
+  const draw = () => {
+    const n = items.filter((x) => x.on).length;
+    view.innerHTML = `
+      <div class="page-head"><h1 class="page-title">Import cookbook</h1><a class="link" href="#/add">Cancel</a></div>
+      <p>Found <b>${items.length} recipes</b> in <b>${esc(fileName)}</b>. Check the course and whose recipe each one is. You can fix the details of any recipe later with <b>Edit</b>.</p>
+      <p class="btn-row"><button class="btn primary big" id="cb-go" ${n ? '' : 'disabled'}>Import ${n} recipe${n === 1 ? '' : 's'}</button> <button class="btn" id="cb-all">${n === items.length ? 'Select none' : 'Select all'}</button></p>
+      <ul class="cb-list">${items.map((x, i) => `<li class="cb ${x.on ? '' : 'off'}">
+        <label class="cb-check"><input type="checkbox" data-on="${i}" ${x.on ? 'checked' : ''} aria-label="Import ${esc(x.r.title)}"></label>
+        <div class="cb-body">
+          <input class="cb-title" data-f="title" data-i="${i}" value="${esc(x.r.title)}" aria-label="Title">
+          <div class="cb-row">
+            <select data-f="category" data-i="${i}" aria-label="Course">${courseOpts(x.r.category)}</select>
+            <input data-f="from" data-i="${i}" value="${esc(x.r.from)}" placeholder="Whose recipe?" aria-label="Whose recipe">
+          </div>
+          <p class="small muted">${proteinOf(x.r) ? esc(proteinIcon(proteinOf(x.r)) + ' ' + proteinLabel(proteinOf(x.r))) + ' · ' : ''}${x.r.ingredients.length} ingredients · ${x.r.steps.length} step${x.r.steps.length === 1 ? '' : 's'}
+            ${x.empty ? ' · <b class="warn-t">only a title so far — saved as a placeholder to fill in</b>' : ''}${x.dupe ? ' · <b class="warn-t">already in your recipes</b>' : ''}</p>
+          <details><summary class="small">Preview</summary><div class="cb-prev small">
+            ${x.r.ingredients.length ? `<ul>${x.r.ingredients.map((g) => `<li>${esc(qtyText(g.qty, g.qtyMax, g.unit))} ${esc(g.unit ? unitLabel(g.unit, g.qty) : '')} ${esc(g.item)}${g.note ? ` <span class="muted">(${esc(g.note)})</span>` : ''}</li>`).join('')}</ul>` : ''}
+            ${x.r.steps.length ? `<ol>${x.r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : ''}
+            ${x.r.notes ? `<p class="pre">${esc(x.r.notes)}</p>` : ''}</div></details>
+        </div></li>`).join('')}</ul>`;
+    $$('[data-on]').forEach((c) => c.onchange = () => { items[+c.dataset.on].on = c.checked; draw(); });
+    $$('.cb [data-f]').forEach((el) => el.onchange = () => { items[+el.dataset.i].r[el.dataset.f] = el.value.trim(); });
+    $('#cb-all').onclick = () => { const all = items.every((x) => x.on); items.forEach((x) => (x.on = !all)); draw(); };
+    $('#cb-go').onclick = async () => {
+      const chosen = items.filter((x) => x.on);
+      const btn = $('#cb-go'); btn.disabled = true;
+      let done = 0;
+      for (const x of chosen) {
+        const rec = { ...x.r, favorites: {} };
+        if (x.empty && !rec.notes) rec.notes = 'Only the name was in the cookbook. Tap Edit to add the ingredients and steps.';
+        rec.ingredients = rec.ingredients.map(({ raw, ...g }) => g);
+        if (!rec.source) rec.source = fileName.replace(/\.docx$/i, '');
+        const ok = await guard(() => S.store.saveRecipe(rec));
+        if (ok) done++;
+        btn.textContent = `Importing… ${done}/${chosen.length}`;
+      }
+      toast(`Imported ${done} recipe${done === 1 ? '' : 's'}`);
+      S.filter = { ...S.filter, q: '', show: 'all', cat: '', protein: '', by: '', sort: 'g-course' };
+      go('#/');
+    };
+  };
+  draw();
+}
+
 // ------------------------------------------------------------- editor -----
 function blankRecipe() {
-  return { title: '', description: '', category: '', tags: [], servings: 4, prepTime: '', cookTime: '', source: '', ingredients: [], steps: [], notes: '' };
+  return { title: '', from: '', description: '', category: '', tags: [], servings: 4, prepTime: '', cookTime: '', source: '', ingredients: [], steps: [], notes: '' };
 }
 function renderEditor(id) {
   let r;
@@ -469,7 +537,10 @@ function renderEditor(id) {
         <div class="row3">
           <label>Prep time<input name="prepTime" value="${esc(r.prepTime)}" placeholder="20 min"></label>
           <label>Cook time<input name="cookTime" value="${esc(r.cookTime)}" placeholder="1 hr"></label>
-          <label>Source<input name="source" value="${esc(r.source)}" placeholder="Aunt May's card"></label>
+          <label>Source<input name="source" value="${esc(r.source)}" placeholder="Aunt May's card, a website…"></label>
+        </div>
+        <div class="row3">
+          <label>Whose recipe<input name="from" value="${esc(r.from || '')}" placeholder="Nanny, Dad, Aunt May…"></label>
         </div>
         <div class="cover-row">
           ${r.thumb ? `<img class="cover-prev" src="${esc(r.thumb)}" alt="Cover photo">` : ''}
@@ -510,7 +581,7 @@ function renderEditor(id) {
   const form = $('#ed');
   const sync = () => {
     const fd = new FormData(form);
-    for (const k of ['title', 'description', 'category', 'prepTime', 'cookTime', 'source', 'notes']) r[k] = (fd.get(k) || '').toString();
+    for (const k of ['title', 'from', 'description', 'category', 'prepTime', 'cookTime', 'source', 'notes']) r[k] = (fd.get(k) || '').toString();
     r.servings = parseNumber(fd.get('servings')) || null;
     r.protein = (fd.get('protein') || '').toString();
     r.tags = (fd.get('tags') || '').toString().split(',').map((s) => s.trim()).filter(Boolean);

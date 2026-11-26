@@ -72,16 +72,36 @@ export async function ocrImage(file, onProgress) {
   } finally { worker.terminate(); }
 }
 
-export async function readWordFile(file) {
+// Word (.docx) -> { blocks: [{ level, text }], text }. level is 1-6 for headings, 0 otherwise.
+// Headings matter: a cookbook usually has one heading per recipe.
+export async function readWordDocument(file) {
   const name = (file.name || '').toLowerCase();
   if (name.endsWith('.doc') && !name.endsWith('.docx')) {
     throw new Error('This is an older Word file (.doc). Open it in Word or Google Docs and "Save as" .docx, then try again.');
   }
   await loadScript(MAMMOTH);
   const buf = await file.arrayBuffer();
-  const res = await window.mammoth.extractRawText({ arrayBuffer: buf });
-  // mammoth separates paragraphs with blank lines; keep single breaks between short lines.
-  return res.value.replace(/\n{2,}/g, '\n').replace(/\n(?=\S[^\n]{60,})/g, '\n\n');
+  const res = await window.mammoth.convertToHtml({ arrayBuffer: buf }, {
+    // skip pictures (page backgrounds, decorations) - they'd only bloat the import
+    convertImage: window.mammoth.images.imgElement(() => Promise.resolve({ src: '' })),
+  });
+  const doc = new DOMParser().parseFromString('<body>' + res.value + '</body>', 'text/html');
+  const blocks = [];
+  const walk = (el) => {
+    for (const n of el.children) {
+      const tag = n.tagName.toLowerCase();
+      if (/^h[1-6]$/.test(tag)) blocks.push({ level: +tag[1], text: n.textContent });
+      else if (tag === 'p') blocks.push({ level: 0, text: n.textContent });
+      else if (tag === 'ul' || tag === 'ol') { for (const li of n.querySelectorAll(':scope > li')) blocks.push({ level: 0, text: li.textContent }); blocks.push({ level: 0, text: '' }); }
+      else if (tag === 'table') { for (const td of n.querySelectorAll('td, th')) blocks.push({ level: 0, text: td.textContent.replace(/\s+/g, ' ') }); }
+      else walk(n);
+    }
+  };
+  walk(doc.body);
+  const text = blocks.map((x) => x.text.trim()).join('\n').replace(/\n{3,}/g, '\n\n');
+  return { blocks, text };
 }
+
+export async function readWordFile(file) { return (await readWordDocument(file)).text; }
 
 export async function readTextFile(file) { return file.text(); }

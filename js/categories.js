@@ -56,6 +56,8 @@ export function detectProtein(recipe) {
     if (/\bgelatin\b/.test(n)) trace = true;
     for (const [k, , , re] of PROTEINS) if (re && re.test(n)) { score[k] = (score[k] || 0) + 1; break; }
   }
+  // meat mentioned only in the steps ("brown 1/2 lb sausage") -> not vegetarian
+  for (const st of recipe.steps || []) { const n = ' ' + String(st).toLowerCase() + ' '; if (PROTEINS.some(([, , , re]) => re && re.test(n)) && !NOT_MEAT.test(n)) trace = true; }
   const best = PROTEINS.filter(([k]) => score[k]).sort((a, b) => score[b[0]] - score[a[0]])[0];
   if (best) return best[0];
   if (['Dessert', 'Baking', 'Drinks', 'Sauce', 'Bread'].includes(recipe.category)) return '';
@@ -64,3 +66,28 @@ export function detectProtein(recipe) {
 
 // The value used for filtering: the family's choice if set, else the detected one.
 export const proteinOf = (r) => r.protein || detectProtein(r);
+
+// Guess the course from the title (and meat in the ingredients). '' when unsure.
+const COURSE_RULES = [
+  ['Breakfast', /\b(pancakes?|waffles?|french toast|omelets?|omelettes?|frittata|breakfast|granola|hash browns?|quiche)\b/],
+  ['Snack', /\b(pretzels?|popcorn|trail mix|chex mix|party mix|snack)\b/],
+  ['Side', /\bpotato (pie|salad|casserole)\b/],
+  ['Dessert', /\b(cakes?|cupcakes?|cookies?|brownies?|blondies?|pies?|tarts?|mousse|pudding|ice cream|cheesecake|crisp|cobbler|crumble|fudge|candy|truffles?|frosting|icing|dessert|sundae|parfait|log roll|whip(ped)? cream|bars|meringue|custard|flan|tiramisu|trifle)\b/],
+  ['Bread', /\b(bread|breads|rolls?|biscuits?|muffins?|scones?|cornbread|focaccia|loaf|bagels?|buns?|dough)\b/],
+  ['Soup', /\b(soup|stew|chowder|bisque|chili|chilie|chilli|gumbo|broth|pho|ramen)\b/],
+  ['Salad', /\b(salad|slaw)\b/],
+  ['Sauce', /\b(gravy|sauce|salsa|marinade|glaze|aioli|pesto|vinaigrette|jam|jelly)\b/],
+  ['Drinks', /\b(smoothie|lemonade|punch|cocktail|latte|shake|cider|eggnog|sangria|margarita)\b/],
+  ['Appetizer', /\b(dip|appetizers?|deviled eggs|bruschetta|crostini|wings|bites|poppers|nachos|guacamole|hummus|grilled avocado|avocado)\b/],
+  ['Side', /\b(stuffing|dressing|rice|pilaf|mashed|potatoes|vegetables?|veggies?|medley|medly|green beans|corn|fries|coleslaw|squash|carrots|asparagus|brussels)\b/],
+  ['Main', /\b(casseroles?|casarole|curry|lasagna|meatballs?|meatloaf|alfredo|fettuccine|pasta|spaghetti|tacos?|enchiladas?|stir fry|roast|turkey|chicken|steak|chops|pork|salmon|fish|shrimp|burgers?|pizza|nuggets|pot pie|ham|ribs|brisket|sandwich|wraps?)\b/],
+];
+export function detectCourse(recipe) {
+  if (!recipe) return '';
+  const hint = normalizeItem(recipe.courseHint || '');
+  if (hint) { const c = COURSES.find(([v, l]) => hint.startsWith(v.toLowerCase()) || hint.startsWith(l.toLowerCase())); if (c) return c[0]; }
+  const title = ' ' + normalizeItem(recipe.title || '').replace(/-/g, ' ') + ' ';
+  for (const [course, re] of COURSE_RULES) if (re.test(title)) return course;
+  const p = detectProtein(recipe);
+  return p && p !== 'vegetarian' && p !== 'other' ? 'Main' : '';
+}

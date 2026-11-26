@@ -1,7 +1,7 @@
 // node family-recipes/tests/run.mjs
 import { parseNumber, formatQty, massOf, normalizeUnit, formatGrams } from '../js/units.js';
-import { parseIngredientLine, parseRecipeText, splitSteps } from '../js/parse.js';
-import { detectProtein, proteinOf, COURSES, PROTEINS } from '../js/categories.js';
+import { parseIngredientLine, parseRecipeText, splitSteps, splitCookbook, splitTitle } from '../js/parse.js';
+import { detectProtein, detectCourse, proteinOf, COURSES, PROTEINS } from '../js/categories.js';
 import { addToList, combineQty, aisleFor, itemKey, AISLE_ORDER } from '../js/grocery.js';
 
 let pass = 0, fail = 0;
@@ -144,6 +144,54 @@ t('main ingredient auto-detect', () => {
 });
 t('course and ingredient lists have unique values', () => {
   eq(new Set(COURSES.map((c) => c[0])).size, COURSES.length); eq(new Set(PROTEINS.map((c) => c[0])).size, PROTEINS.length);
+});
+
+t('whose recipe from the title', () => {
+  eq(splitTitle('Stuffing-mom/dad'), { title: 'Stuffing', from: 'Mom/Dad' });
+  eq(splitTitle('Potato pie-nanny’s'), { title: 'Potato pie', from: 'Nanny' });
+  eq(splitTitle('Pot Roast (Aunt May)'), { title: 'Pot Roast', from: 'Aunt May' });
+  eq(splitTitle('Avocado-grilled'), { title: 'Avocado-grilled', from: '' });
+  eq(splitTitle('Recipe for Lentil Soup'), { title: 'Lentil Soup', from: '' });
+  eq(splitTitle("Grandma's Apple Pie"), { title: "Grandma's Apple Pie", from: 'Grandma' });
+});
+t('ingredient shorthand from family cookbooks', () => {
+  const a = parseIngredientLine('1t. salt'); eq([a.qty, a.unit, a.item], [1, 'tsp', 'salt']);
+  const b = parseIngredientLine('1/4c. melted butter'); eq([b.qty, b.unit, b.item], [0.25, 'cup', 'melted butter']);
+  const c = parseIngredientLine('Heavy cream (1/2 cup)'); eq([c.qty, c.unit, c.item], [0.5, 'cup', 'Heavy cream']);
+  const d = parseIngredientLine('Half cup of rice'); eq([d.qty, d.unit, d.item], [0.5, 'cup', 'rice']);
+  const e = parseIngredientLine('1” piece ginger, grated'); eq([e.qty, e.unit, e.item], [1, 'piece', 'ginger']);
+  const f = parseIngredientLine('Pinch of salt'); eq([f.qty, f.unit], [1, 'pinch']);
+  const g = parseIngredientLine('¼ tp pepper'); eq([g.qty, g.unit], [0.25, 'tsp']);
+});
+t('cookbook: split by headings, sort each recipe', () => {
+  const blocks = [
+    { level: 0, text: '' },
+    { level: 1, text: 'Pot roast-dad' }, { level: 0, text: '3 lb chuck roast' }, { level: 0, text: 'Carrots' }, { level: 0, text: 'Onion' }, { level: 0, text: '' },
+    { level: 0, text: 'Brown the roast on all sides' }, { level: 0, text: 'Cook 3 hours at 300' },
+    { level: 1, text: 'Sugar cookies' }, { level: 4, text: 'INGREDIENTS' }, { level: 0, text: '1 cup butter' }, { level: 0, text: '2 cups flour' },
+    { level: 4, text: 'DIRECTIONS' }, { level: 0, text: 'Cream the butter.' }, { level: 0, text: 'Read more: http://example.com/cookies' },
+    { level: 1, text: 'Chili' },
+  ];
+  const book = splitCookbook(blocks);
+  eq(book.map((b) => b.title), ['Pot roast-dad', 'Sugar cookies', 'Chili']);
+  const roast = parseRecipeText(book[0].text, { title: book[0].title, paragraphs: true });
+  eq([roast.title, roast.from, roast.ingredients.length, roast.steps.length], ['Pot roast', 'Dad', 3, 2]);
+  eq([detectCourse(roast), detectProtein(roast)], ['Main', 'beef']);
+  const cookies = parseRecipeText(book[1].text, { title: book[1].title, paragraphs: true });
+  eq([cookies.ingredients.length, cookies.steps, cookies.source], [2, ['Cream the butter.'], 'http://example.com/cookies']);
+  eq(detectCourse(cookies), 'Dessert');
+  const chili = parseRecipeText(book[2].text, { title: book[2].title, paragraphs: true });
+  eq([chili.ingredients.length, chili.steps.length, detectCourse(chili)], [0, 0, 'Soup']);
+  eq(splitCookbook([{ level: 0, text: 'one recipe' }]), []);
+});
+t('meat only in the steps is not vegetarian', () => {
+  eq(detectProtein({ title: 'Stuffing', ingredients: [{ item: 'bread' }], steps: ['brown 1/2 lb pork sausage'] }), '');
+});
+t('course detection', () => {
+  eq(detectCourse({ title: 'Potato pie' }), 'Side'); eq(detectCourse({ title: 'Fruit tart' }), 'Dessert');
+  eq(detectCourse({ title: 'Banana Bread' }), 'Bread'); eq(detectCourse({ title: 'Gravy' }), 'Sauce');
+  eq(detectCourse({ title: 'Chocolate Pretzels' }), 'Snack'); eq(detectCourse({ title: 'Red coconut curry' }), 'Main');
+  eq(detectCourse({ title: 'Something', courseHint: 'Main' }), 'Main');
 });
 
 console.log(`\n${pass}/${pass + fail} tests passed`);
